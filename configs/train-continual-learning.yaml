@@ -9,10 +9,11 @@ defaults:
 seed: 42
 data_seed: 0 # added to seed
 nmodels: 1
+ntasks: 5
 checkpointing:
   path: checkpoints
   rate: 50 # in epochs
 training:
-  nepochs: 50
+  nepochs: 2
   log_epochs: true
   log_interval: null # in steps

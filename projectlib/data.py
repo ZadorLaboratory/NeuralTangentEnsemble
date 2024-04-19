@@ -2,8 +2,7 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 from clu.preprocess_spec import PreprocessFn
 from dataclasses import dataclass
-from dataclasses import dataclass
-from typing import Tuple, Sequence
+from typing import Tuple, Sequence, Optional
 
 @dataclass
 class ToFloat:
@@ -73,9 +72,36 @@ class OneHot:
             for k, v in features.items()
         }
 
+@dataclass
+class StaticShuffle:
+    size: int
+    seed: int = 0
+    permutation: Optional[tf.Tensor] = None
+    name: str = "image"
+
+    def __post_init__(self):
+        if self.permutation is None:
+            self.permutation = tf.random.shuffle(tf.range(self.size),
+                                                 seed=self.seed)
+
+    def _shuffle(self, feature):
+        s = feature.shape
+        feature = tf.reshape(feature, [-1, tf.math.reduce_prod(s[1:])])
+        feature = tf.gather(feature, self.permutation, axis=1)
+
+        return tf.reshape(feature, [-1, *s[1:]])
+
+    def __call__(self, features):
+        return {
+            k: self._shuffle(v) if k == self.name else v
+            for k, v in features.items()
+        }
+
 def default_data_transforms(dataset):
     if dataset == "mnist":
-        return PreprocessFn([ToFloat(), OneHot(10)],
+        return PreprocessFn([ToFloat(),
+                             Standardize((0.1307,), (0.3081,)),
+                             OneHot(10)],
                             only_jax_types=True)
     elif dataset == "cifar10":
         return PreprocessFn([RandomCrop((32, 32), (2, 2)),

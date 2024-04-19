@@ -29,6 +29,12 @@ def get_hparams(opt_state):
 @struct.dataclass
 class MetricCollection(metrics.Collection):
     @classmethod
+    def create(cls, **metrics: type[metrics.Metric]):
+        return flax.struct.dataclass(
+            type("_InlineCollection", (cls,), {"__annotations__": metrics})
+        )
+
+    @classmethod
     def _from_model_output(cls: type[metrics.C], **kwargs) -> metrics.C:
         """Creates a `Collection` from model outputs."""
         return cls(
@@ -39,43 +45,60 @@ class MetricCollection(metrics.Collection):
                 for name, metric in cls.__annotations__.items()
             })
 
+    def init_history(self):
+        return {
+            "train": {k: [] for k in self.__annotations__.keys()},
+            "test": {k: [] for k in self.__annotations__.keys()}
+        }
+
+    def _get_internal_array(self):
+        arr = getattr(self, next(iter(self.__annotations__.keys())))
+
+        return arr.count
+
+    def compute(self):
+        arr = self._get_internal_array()
+        if len(arr.devices()) > 1:
+            return super(MetricCollection, self.unreplicate()).compute()
+        elif arr.ndim > 0:
+            return jax.vmap(lambda m: super(MetricCollection, m).compute())(self)
+        else:
+            return super(MetricCollection, self).compute()
+
+    def reempty(self):
+        arr = self._get_internal_array()
+        devices = list(arr.devices())
+        if len(devices) > 1:
+            empty_metric = super(MetricCollection, self).empty()
+            return flax.jax_utils.replicate(empty_metric, devices)
+        elif arr.ndim > 0:
+            return jax.vmap(lambda m: super(MetricCollection, m).empty())(self)
+        else:
+            return super(MetricCollection, self).empty()
+
 @struct.dataclass
 class Metrics(MetricCollection):
     accuracy: metrics.Average.from_output('accuracy') # type: ignore
     loss: metrics.Average.from_output('loss') # type: ignore
 
-    @staticmethod
-    def init_history():
-        return {
-            "train": {"accuracy": [], "loss": []},
-            "test": {"accuracy": [], "loss": []},
-        }
-
-    def compute(self):
-        if len(self.loss.count.devices()) > 1:
-            return super(Metrics, self.unreplicate()).compute()
-        elif self.loss.count.ndim > 0:
-            return jax.vmap(lambda m: super(Metrics, m).compute())(self)
-        else:
-            return super(Metrics, self).compute()
-
-    def reempty(self):
-        devices = list(self.loss.count.devices())
-        if len(devices) > 1:
-            empty_metric = super(Metrics, self).empty()
-            return flax.jax_utils.replicate(empty_metric, devices)
-        elif self.loss.count.ndim > 0:
-            return jax.vmap(lambda m: super(Metrics, m).empty())(self)
-        else:
-            return super(Metrics, self).empty()
+@struct.dataclass
+class MultitaskMetrics(MetricCollection):
+    @classmethod
+    def create(cls, n = 1):
+        return MetricCollection.create(
+            **{f"accuracy_{i}": metrics.Average.from_output(f"accuracy_{i}")
+               for i in range(n)},
+            **{f"loss_{i}": metrics.Average.from_output(f"loss_{i}")
+               for i in range(n)}
+        )
 
 class TrainState(train_state.TrainState):
-    metrics: Optional[Metrics] = None
+    metrics: Optional[MetricCollection] = None
     rngs: Dict[str, Array] = struct.field(default_factory=dict)
     current_step: int = 0
 
     @classmethod
-    def from_model(cls, model, dummy_input, opt, rngs, param_init = None):
+    def from_model(cls, model, dummy_input, opt, rngs, metrics = Metrics, param_init = None):
         _init = model.init if param_init is None else param_init
         if isinstance(dummy_input, tuple):
             params = _init(rngs, *dummy_input)
@@ -86,7 +109,7 @@ class TrainState(train_state.TrainState):
                           params=params,
                           tx=opt,
                           rngs=rngs,
-                          metrics=Metrics.empty())
+                          metrics=metrics.empty())
 
     def split_rngs(self):
         def _split(key):
@@ -152,12 +175,14 @@ def create_train_step(loss_fn, batch_stats = False):
 
     return train_step
 
-def evaluate_metrics(state: TrainState, loader, metrics_fn, rng, rng_split = jrng.split):
-    for batch in loader.as_numpy_iterator():
-        batch = batch_values(batch)
-        rng, rng_metric = rng_split(rng)
-        state = state.split_rngs()
-        state = metrics_fn(state, batch, rng_metric)
+def evaluate_metrics(state: TrainState, loaders, metrics_fn, rng, rng_split = jrng.split):
+    loaders = loaders if isinstance(loaders, list) else [loaders]
+    for i, loader in enumerate(loaders):
+        for batch in loader.as_numpy_iterator():
+            batch = batch_values(batch)
+            rng, rng_metric = rng_split(rng)
+            state = state.split_rngs()
+            state = metrics_fn(state, batch, rng_metric, suffix=f"_{i}")
 
     return state
 
@@ -168,8 +193,9 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
         start_epoch = 0,
         epoch_logging = True,
         step_log_interval = 100,
-        logger = PrintLogger()):
-    metric_history = state.metrics.init_history()
+        logger = PrintLogger(),
+        metric_history = None):
+    metric_history = maybe(metric_history, state.metrics.init_history())
     rng = maybe(rng, jrng.PRNGKey(0))
 
     # vmap helpers for multiple parallel models

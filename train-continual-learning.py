@@ -13,14 +13,34 @@ import seaborn as sns
 import hydra
 import orbax.checkpoint as ocp
 from omegaconf import DictConfig, ListConfig, OmegaConf
-from functools import partial
+from functools import partial, reduce
 from orbax.checkpoint import CheckpointManager, CheckpointManagerOptions
+from clu.preprocess_spec import PreprocessFn
 
 from projectlib.utils import setup_rngs, instantiate_optimizer
-from projectlib.data import build_dataloader, default_data_transforms
-from projectlib.training import TrainState, create_train_step, fit
+from projectlib.data import build_dataloader, default_data_transforms, StaticShuffle
+from projectlib.training import MultitaskMetrics, TrainState, create_train_step, fit
 
-@hydra.main(config_path="./configs", config_name="train-bp", version_base=None)
+def generate_tasks(cfg):
+    data = tfds.load(cfg.data.dataset)
+    perm_size = reduce(lambda x, y: x * y, cfg.data.shape)
+    base_preprocess = default_data_transforms(cfg.data.dataset)
+    shuffle_preprocess = [PreprocessFn([StaticShuffle(perm_size, i)], only_jax_types=True)
+                          for i in range(cfg.ntasks)]
+    train_loaders = [build_dataloader(
+        data["train"],
+        batch_transform=base_preprocess + shuffle_preprocess[i],
+        batch_size=cfg.data.batchsize
+    ) for i in range(cfg.ntasks)]
+    test_loaders = [build_dataloader(
+        data["test"],
+        batch_transform=base_preprocess + shuffle_preprocess[i],
+        batch_size=cfg.data.batchsize
+    ) for i in range(cfg.ntasks)]
+
+    return train_loaders, test_loaders
+
+@hydra.main(config_path="./configs", config_name="train-continual-learning", version_base=None)
 def main(cfg: DictConfig):
     if isinstance(cfg.gpu, ListConfig):
         # select device(s) for parallel training
@@ -40,24 +60,18 @@ def main(cfg: DictConfig):
     tf.random.set_seed(cfg.seed) # deterministic data iteration
 
     # setup dataloaders
-    data = tfds.load(cfg.data.dataset)
-    preprocess_fn = default_data_transforms(cfg.data.dataset)
-    train_loader = build_dataloader(data["train"],
-                                    batch_transform=preprocess_fn,
-                                    batch_size=cfg.data.batchsize)
-    test_loader = build_dataloader(data["test"],
-                                   batch_transform=preprocess_fn,
-                                   batch_size=cfg.data.batchsize)
+    train_loaders, test_loaders = generate_tasks(cfg)
 
     # setup model
     model = hydra.utils.instantiate(cfg.model)
     init_keys = {"params": rngs["model"]}
 
     # create optimizer
-    opt = instantiate_optimizer(cfg.optimizer, len(train_loader))
+    opt = instantiate_optimizer(cfg.optimizer, len(train_loaders[0]))
     # create training state (initialize parameters)
     dummy_input = jnp.ones((1, *cfg.data.shape))
-    init_state = partial(TrainState.from_model, model, dummy_input, opt)
+    init_state = partial(TrainState.from_model, model, dummy_input, opt,
+                         metrics=MultitaskMetrics.create(n=cfg.ntasks))
     if cfg.nmodels > 1:
         train_state = jax.vmap(init_state)(init_keys)
     else:
@@ -65,14 +79,14 @@ def main(cfg: DictConfig):
     # create training step
     loss_fn = optax.softmax_cross_entropy
     train_step = create_train_step(loss_fn)
-    @jax.jit
-    def metric_step(state: TrainState, batch, _ = None):
+    @partial(jax.jit, static_argnums=3)
+    def metric_step(state: TrainState, batch, _ = None, suffix = ""):
         xs, ys = batch
         ypreds = state.apply_fn(state.params, xs, rngs=state.rngs)
         loss = jnp.mean(loss_fn(ypreds, ys))
         acc = jnp.mean(jnp.argmax(ypreds, axis=-1) == jnp.argmax(ys, axis=-1))
         metrics_updates = state.metrics.single_from_model_output(
-            loss = loss, accuracy = acc
+            **{f"loss{suffix}": loss, f"accuracy{suffix}": acc}
         )
         metrics = state.metrics.merge(metrics_updates)
         state = state.replace(metrics=metrics)
@@ -98,19 +112,24 @@ def main(cfg: DictConfig):
     logger.log_config(cfg)
 
     # run training
-    final_state, trace = fit({"train": train_loader, "test": test_loader},
-                             train_state,
-                             train_step,
-                             metric_step,
-                             save_fn=ckpt_mgr.save,
-                             rng=rngs["train"],
-                             nepochs=cfg.training.nepochs,
-                             logger=logger,
-                             epoch_logging=cfg.training.log_epochs,
-                             step_log_interval=cfg.training.log_interval)
+    trace = train_state.metrics.init_history()
+    for i, train_loader in enumerate(train_loaders):
+        print(f"\nRUNNING Task {i}...")
+        train_state, trace = fit({"train": train_loader, "test": test_loaders},
+                                 train_state,
+                                 train_step,
+                                 partial(metric_step, suffix=f"_{i}"),
+                                 save_fn=ckpt_mgr.save,
+                                 rng=rngs["train"],
+                                 nepochs=cfg.training.nepochs,
+                                 start_epoch=(i * cfg.training.nepochs),
+                                 metric_history=trace,
+                                 logger=logger,
+                                 epoch_logging=cfg.training.log_epochs,
+                                 step_log_interval=cfg.training.log_interval)
 
     # save final state
-    ckpt = {"train_state": final_state, "metrics_history": trace}
+    ckpt = {"train_state": train_state, "metrics_history": trace}
     ckpt_mgr.save(cfg.training.nepochs, args=ocp.args.StandardSave(ckpt), force=True)
     ckpt_mgr.wait_until_finished()
 

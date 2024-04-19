@@ -7,11 +7,9 @@ license = "MIT"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "~3.10"
+python = "~3.11"
 ipython = "*"
-ipykernel = "*"
-jupyter = "*"
-tensorflow = "~2.12"
+tensorflow = "~2.15"
 tensorflow_datasets = "*"
 nvidia-cudnn-cu12 = "8.9.4.*"
 jax = {version="~0.4", extras=["cuda12_pip"]}
