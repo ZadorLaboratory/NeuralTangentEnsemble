@@ -1,0 +1,18 @@
+defaults:
+- common
+- model: simple-mlp
+- data: mnist
+- optimizer: sgd
+- _self_
+- optional task-overrides: ${data}_${model}
+
+seed: 42
+data_seed: 0 # added to seed
+nmodels: 1
+checkpointing:
+  path: checkpoints
+  rate: 50 # in epochs
+training:
+  nepochs: 50
+  log_epochs: true
+  log_interval: null # in steps

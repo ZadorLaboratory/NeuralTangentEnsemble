@@ -1,0 +1,38 @@
+[tool.poetry]
+name = "neural-tangent-ensemble"
+version = "0.1.0"
+description = ""
+authors = ["Ari Benjamin <benjami@cshl.edu"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "~3.10"
+ipython = "*"
+ipykernel = "*"
+jupyter = "*"
+tensorflow = "~2.12"
+tensorflow_datasets = "*"
+nvidia-cudnn-cu12 = "8.9.4.*"
+jax = {version="~0.4", extras=["cuda12_pip"]}
+jaxlib = {version="~0.4", source="jaxcuda"}
+optax = "*"
+orbax-checkpoint = "*"
+flax = "*"
+clu = "*"
+hydra-core = "~1.3"
+wandb = "*"
+seaborn = "*"
+
+[[tool.poetry.source]]
+name = "PyPI"
+priority = "primary"
+
+[[tool.poetry.source]]
+name = "jaxcuda"
+url = "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html"
+priority = "explicit"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

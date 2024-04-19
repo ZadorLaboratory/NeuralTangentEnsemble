@@ -1,0 +1,5 @@
+_target_: optax.adam
+learning_rate: 0.001
+b1: 0.9
+b2: 0.99
+eps: 1e-8
