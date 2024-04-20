@@ -82,7 +82,7 @@ def main(cfg: DictConfig):
         train_state = init_state(init_keys)
     # create training step
     loss_fn = optax.softmax_cross_entropy
-    if cfg.optimizer._target_ == "ntk_ensemble":
+    if cfg.optimizer._target_ == "projectlib.ntk.ntk_ensemble":
         train_step = create_ntk_ensemble_train_step(loss_fn)
     else:
         train_step = create_train_step(loss_fn)

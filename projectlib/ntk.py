@@ -33,7 +33,7 @@ def ntk_ensemble(learning_rate, inv_temperature, seed, max_delta = None, noise_s
         keys = jrng.split(rng, len(leaves))
         if noise_scale > 0:
             leaves = [noise_scale * jrng.normal(k, p.shape, p.dtype)
-                    for p, k in zip(leaves, keys)]
+                      for p, k in zip(leaves, keys)]
         max_norm = sum(jnp.sum(jnp.abs(d)) for d in leaves)
         deltas = jtu.tree_unflatten(structure, leaves)
 
@@ -50,13 +50,18 @@ def ntk_ensemble(learning_rate, inv_temperature, seed, max_delta = None, noise_s
         log_likelihood = jtu.tree_map(lambda l: jnp.sum(jnp.log(l), axis=0),
                                       likelihood)
         # compute update and unlift from log space then normalize
-        deltas = jtu.tree_map(lambda d, ll: learning_rate * d * jnp.exp(ll),
-                              state.deltas, log_likelihood)
+        log_lr = jnp.log(learning_rate)
+        deltas = jtu.tree_map(
+            lambda d, ll: jnp.exp(log_lr + jnp.log(jnp.abs(d)) + ll) * jnp.sign(d),
+            state.deltas, log_likelihood
+        )
         # renormalize
         current_norm = jtu.tree_reduce(lambda acc, d: acc + jnp.sum(jnp.abs(d)),
                                        deltas, initializer=0)
+        max_d = jnp.inf if max_delta is None else max_delta
         deltas = jtu.tree_map(
-            lambda d: jnp.clip(d * (state.max_norm / current_norm), a_max=max_delta),
+            lambda d: jnp.clip(d * (state.max_norm / current_norm),
+                               a_min=-max_d, a_max=max_d),
             deltas
         )
 
