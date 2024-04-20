@@ -1,3 +1,0 @@
-_target_: optax.join_schedules
-schedules: [0.001]
-boundaries: ???

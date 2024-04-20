@@ -1,7 +1,0 @@
-_target_: optax.exponential_decay
-init_value: 0.001
-decay_rate: 0.5
-transition_begin: 0
-transition_steps: 1
-staircase: false
-end_value: null

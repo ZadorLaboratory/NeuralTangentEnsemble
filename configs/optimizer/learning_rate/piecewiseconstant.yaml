@@ -1,3 +1,0 @@
-_target_: optax.piecewise_constant_schedule
-init_value: 0.001
-boundaries_and_scales: null
