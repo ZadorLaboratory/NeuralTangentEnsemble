@@ -56,13 +56,3 @@ def instantiate_schedule(cfg: DictConfig, steps_per_epoch):
         return optax.join_schedules(schedules, boundaries)
     else:
         return hydra.utils.instantiate(cfg)
-
-def instantiate_optimizer(cfg: DictConfig, steps_per_epoch):
-    opt_base = hydra.utils.get_method(cfg._target_)
-    opt_factory = optax.inject_hyperparams(opt_base)
-    opt_kwargs = {k: v for k, v in cfg.items() if k != "_target_"}
-    if isinstance(cfg.learning_rate, DictConfig):
-        lr = instantiate_schedule(cfg.learning_rate, steps_per_epoch)
-        opt_kwargs["learning_rate"] = lr
-
-    return optax.chain(optax.clip(1), opt_factory(**opt_kwargs))

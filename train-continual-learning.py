@@ -17,9 +17,13 @@ from functools import partial, reduce
 from orbax.checkpoint import CheckpointManager, CheckpointManagerOptions
 from clu.preprocess_spec import PreprocessFn
 
-from projectlib.utils import setup_rngs, instantiate_optimizer
+from projectlib.utils import setup_rngs
 from projectlib.data import build_dataloader, default_data_transforms, StaticShuffle
-from projectlib.training import MultitaskMetrics, TrainState, create_train_step, fit
+from projectlib.training import (MultitaskMetrics,
+                                 TrainState,
+                                 create_train_step,
+                                 create_ntk_ensemble_train_step,
+                                 fit)
 
 def generate_tasks(cfg):
     data = tfds.load(cfg.data.dataset)
@@ -67,7 +71,7 @@ def main(cfg: DictConfig):
     init_keys = {"params": rngs["model"]}
 
     # create optimizer
-    opt = instantiate_optimizer(cfg.optimizer, len(train_loaders[0]))
+    opt = hydra.utils.instantiate(cfg.optimizer)
     # create training state (initialize parameters)
     dummy_input = jnp.ones((1, *cfg.data.shape))
     init_state = partial(TrainState.from_model, model, dummy_input, opt,
@@ -78,7 +82,10 @@ def main(cfg: DictConfig):
         train_state = init_state(init_keys)
     # create training step
     loss_fn = optax.softmax_cross_entropy
-    train_step = create_train_step(loss_fn)
+    if cfg.optimizer._target_ == "ntk_ensemble":
+        train_step = create_ntk_ensemble_train_step(loss_fn)
+    else:
+        train_step = create_train_step(loss_fn)
     @partial(jax.jit, static_argnums=3)
     def metric_step(state: TrainState, batch, _ = None, suffix = ""):
         xs, ys = batch

@@ -175,6 +175,58 @@ def create_train_step(loss_fn, batch_stats = False):
 
     return train_step
 
+def create_ntk_ensemble_train_step(loss_fn, batch_stats = False):
+    # if batch_stats are calculated, then we need to augment the apply_fn
+    if batch_stats:
+        @jax.jit
+        def train_step(state: TrainState, batch, _ = None):
+            *xs, ys = batch
+            def compute_loss(params):
+                yhats, aux = state.apply_fn(params, *xs,
+                                            rngs=state.rngs,
+                                            train=True,
+                                            mutable=["batch_stats"])
+
+                return jnp.mean(loss_fn(yhats, ys)), aux
+
+            # recompute inital parameters
+            init_params = jtu.tree_map(lambda p, d: p - d,
+                                       state.params, state.opt_state.deltas)
+            # compute per example gradients around initial parameters
+            grad_fn = jax.vmap(jax.value_and_grad(compute_loss, has_aux=True))
+            (loss, aux), grads = grad_fn(init_params)
+            # average loss over samples
+            loss = jnp.mean(loss)
+            # compute ntk ensemble updates
+            state = state.apply_gradients(grads=grads)
+            state = state.replace(params=state.params.copy(aux))
+
+            return loss, state
+    else:
+        @jax.jit
+        def train_step(state: TrainState, batch, _ = None):
+            *xs, ys = batch
+            def compute_loss(params):
+                yhats = state.apply_fn(params, *xs, rngs=state.rngs)
+
+                return jnp.mean(loss_fn(yhats, ys))
+
+            # recompute inital parameters
+            init_params = jtu.tree_map(lambda p, d: p - d,
+                                       state.params, state.opt_state.deltas)
+            # compute per example gradients around initial parameters
+            grad_fn = jax.vmap(jax.value_and_grad(compute_loss))
+            loss, grads = grad_fn(init_params)
+            # average loss over samples
+            loss = jnp.mean(loss)
+            # compute ntk ensemble updates
+            state = state.replace(params=init_params)
+            state = state.apply_gradients(grads=grads)
+
+            return loss, state
+
+    return train_step
+
 def evaluate_metrics(state: TrainState, loaders, metrics_fn, rng, rng_split = jrng.split):
     loaders = loaders if isinstance(loaders, list) else [loaders]
     for i, loader in enumerate(loaders):
