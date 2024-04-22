@@ -26,7 +26,7 @@ class NTKEnsembleState(NamedTuple):
     deltas: FrozenDict[str, Array]
     max_norm: float
 
-def ntk_ensemble(learning_rate, inv_temperature, seed, max_delta = None, noise_scale = 1e-3):
+def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3):
     def init_fn(params):
         leaves, structure = jtu.tree_flatten(params)
         rng = jrng.PRNGKey(seed)
@@ -49,20 +49,20 @@ def ntk_ensemble(learning_rate, inv_temperature, seed, max_delta = None, noise_s
         # lift per example likelihoods into log space and sum
         log_likelihood = jtu.tree_map(lambda l: jnp.sum(jnp.log(l), axis=0),
                                       likelihood)
-        # compute update and unlift from log space then normalize
-        log_lr = jnp.log(learning_rate)
+        # compute update and unlift from log space
+        log_deltas = jtu.tree_map(lambda d, ll: jnp.log(jnp.abs(d)) + ll,
+                                  state.deltas, log_likelihood)
+        # renormalize and clip
+        log_max_norm = jnp.log(state.max_norm)
+        log_current_norm = jax.nn.logsumexp(jnp.array([
+            jax.nn.logsumexp(ll)
+            for ll in jtu.tree_leaves(log_deltas)
+        ]))
+        log_max_delta = jnp.log(max_delta)
         deltas = jtu.tree_map(
-            lambda d, ll: jnp.exp(log_lr + jnp.log(jnp.abs(d)) + ll) * jnp.sign(d),
-            state.deltas, log_likelihood
-        )
-        # renormalize
-        current_norm = jtu.tree_reduce(lambda acc, d: acc + jnp.sum(jnp.abs(d)),
-                                       deltas, initializer=0)
-        max_d = jnp.inf if max_delta is None else max_delta
-        deltas = jtu.tree_map(
-            lambda d: jnp.clip(d * (state.max_norm / current_norm),
-                               a_min=-max_d, a_max=max_d),
-            deltas
+            lambda ld, d: jnp.exp(jnp.clip(ld + log_max_norm - log_current_norm,
+                                           a_max=log_max_delta)) * jnp.sign(d),
+            log_deltas, state.deltas
         )
 
         return deltas, NTKEnsembleState(deltas, state.max_norm)

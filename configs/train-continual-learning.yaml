@@ -17,3 +17,4 @@ training:
   nepochs: 2
   log_epochs: true
   log_interval: null # in steps
+ntk_use_current_params: True # unused for bp training

@@ -1,7 +1,5 @@
 # @package _global_
 
-defaults:
-- mnist_simple-mlp_sgd
-
-optimizer:
-  learning_rate: 1.0
+model:
+  features: [100000]
+  nclasses: 10

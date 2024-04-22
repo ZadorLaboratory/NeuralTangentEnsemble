@@ -175,7 +175,17 @@ def create_train_step(loss_fn, batch_stats = False):
 
     return train_step
 
-def create_ntk_ensemble_train_step(loss_fn, batch_stats = False):
+def create_ntk_ensemble_train_step(loss_fn, use_current_params = True, batch_stats = False):
+    # pull this out to avoid branching inside core train step
+    if use_current_params:
+        def ntk_diff_center(current_params, _):
+            return current_params
+    else:
+        def ntk_diff_center(current_params, deltas):
+            # recompute inital parameters
+            init_params = jtu.tree_map(lambda p, d: p - d, current_params, deltas)
+
+            return init_params
     # if batch_stats are calculated, then we need to augment the apply_fn
     if batch_stats:
         @jax.jit
@@ -191,17 +201,18 @@ def create_ntk_ensemble_train_step(loss_fn, batch_stats = False):
 
                 return loss_fn(yhats, ys), aux
 
-            # recompute inital parameters
-            init_params = jtu.tree_map(lambda p, d: p - d,
-                                       state.params, state.opt_state.deltas)
+            # (maybe) recompute inital parameters
+            ntk_params = ntk_diff_center(state.params, state.opt_state.deltas)
             # compute per example gradients around initial parameters
             grad_fn = jax.vmap(jax.value_and_grad(compute_loss, has_aux=True),
                                in_axes=(None, 0, 0))
-            (loss, aux), grads = grad_fn(init_params, xs, ys)
+            (loss, aux), grads = grad_fn(ntk_params, xs, ys)
             # average loss over samples
             loss = jnp.mean(loss)
             # compute ntk ensemble updates
+            state = state.replace(params=ntk_params)
             state = state.apply_gradients(grads=grads)
+            # update batch_stats
             state = state.replace(params=state.params.copy(aux))
 
             return loss, state
@@ -215,17 +226,16 @@ def create_ntk_ensemble_train_step(loss_fn, batch_stats = False):
 
                 return loss_fn(yhats, ys)
 
-            # recompute inital parameters
-            init_params = jtu.tree_map(lambda p, d: p - d,
-                                       state.params, state.opt_state.deltas)
+            # (maybe) recompute inital parameters
+            ntk_params = ntk_diff_center(state.params, state.opt_state.deltas)
             # compute per example gradients around initial parameters
             grad_fn = jax.vmap(jax.value_and_grad(compute_loss),
                                in_axes=(None, 0, 0))
-            loss, grads = grad_fn(init_params, xs, ys)
+            loss, grads = grad_fn(ntk_params, xs, ys)
             # average loss over samples
             loss = jnp.mean(loss)
             # compute ntk ensemble updates
-            state = state.replace(params=init_params)
+            state = state.replace(params=ntk_params)
             state = state.apply_gradients(grads=grads)
 
             return loss, state

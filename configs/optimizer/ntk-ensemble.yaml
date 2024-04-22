@@ -1,5 +1,4 @@
 _target_: projectlib.ntk.ntk_ensemble
-learning_rate: 1.0
 inv_temperature: 0.1
 seed: 48879 # 0xBEEF
 max_delta: 0.01
