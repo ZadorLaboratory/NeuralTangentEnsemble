@@ -16,15 +16,16 @@ def perturb_params(rng, params, noise_fn = jrng.normal):
 
     return jtu.tree_unflatten(structure, leaves)
 
-def ntk_likelihood(delta, grad, inv_temperature, max_norm):
-    # why is this not multiplied by max_norm?
-    likelihood = 1 - inv_temperature * jnp.sign(delta) * grad
+def log_ntk_likelihood(sign_delta, grad, inv_temperature, log_max_norm):
+    # why is this not multiplied by log_max_norm?
+    log_likelihood = jnp.log1p( - inv_temperature * sign_delta * grad)
 
-    return likelihood
+    return log_likelihood
 
 class NTKEnsembleState(NamedTuple):
-    deltas: FrozenDict[str, Array]
-    max_norm: float
+    sign_deltas: FrozenDict[str, Array]
+    log_deltas: FrozenDict[str, Array]
+    log_max_norm: float
 
 def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3):
     def init_fn(params):
@@ -34,37 +35,39 @@ def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3):
         if noise_scale > 0:
             leaves = [noise_scale * jrng.normal(k, p.shape, p.dtype)
                       for p, k in zip(leaves, keys)]
-        max_norm = sum(jnp.sum(jnp.abs(d)) for d in leaves)
+        log_max_norm = sum(jnp.sum(jnp.abs(d)) for d in leaves)
         deltas = jtu.tree_unflatten(structure, leaves)
-
-        return NTKEnsembleState(deltas, max_norm)
+        sign_deltas = jtu.tree_map(lambda d: jnp.asarray(jnp.sign(d), dtype=jax.numpy.int8), deltas) # int8 but in theory could be a single bit per param
+        log_deltas = jtu.tree_map(jnp.log, jtu.tree_map(jnp.abs, deltas))
+        
+        return NTKEnsembleState(sign_deltas, log_deltas, log_max_norm)
 
     def update_fn(grads, state: NTKEnsembleState, _ = None):
         # compute ntk likelihood
-        likelihood_fn = partial(ntk_likelihood,
+        log_likelihood_fn = partial(log_ntk_likelihood,
                                 inv_temperature=inv_temperature,
-                                max_norm=state.max_norm)
-        likelihood_fn = jax.vmap(likelihood_fn, in_axes=(None, 0))
-        likelihood = jtu.tree_map(likelihood_fn, state.deltas, grads)
-        # lift per example likelihoods into log space and sum
-        log_likelihood = jtu.tree_map(lambda l: jnp.sum(jnp.log(l), axis=0),
-                                      likelihood)
-        # compute update and unlift from log space
-        log_deltas = jtu.tree_map(lambda d, ll: jnp.log(jnp.abs(d)) + ll,
-                                  state.deltas, log_likelihood)
+                                log_max_norm=state.log_max_norm)
+        log_likelihood_fn = jax.vmap(log_likelihood_fn, in_axes=(None, 0))
+        log_likelihood = jtu.tree_map(log_likelihood_fn, state.sign_deltas, grads)
+        # sum over batch
+        log_likelihood = jtu.tree_map(lambda l: jnp.sum(l, axis=0), log_likelihood)
+        # compute update 
+        log_deltas = jtu.tree_map(lambda ld, ll: ld + ll,
+                                  state.log_deltas, log_likelihood)
         # renormalize and clip
-        log_max_norm = jnp.log(state.max_norm)
         log_current_norm = jax.nn.logsumexp(jnp.array([
             jax.nn.logsumexp(ll)
             for ll in jtu.tree_leaves(log_deltas)
         ]))
         log_max_delta = jnp.log(max_delta)
-        deltas = jtu.tree_map(
-            lambda ld, d: jnp.exp(jnp.clip(ld + log_max_norm - log_current_norm,
-                                           a_max=log_max_delta)) * jnp.sign(d),
-            log_deltas, state.deltas
+        log_deltas = jtu.tree_map(
+            lambda ld: jnp.clip(ld + state.log_max_norm - log_current_norm,
+                                           a_max=log_max_delta),
+            log_deltas,
         )
+        deltas = jtu.tree_map(lambda ld, s: jnp.exp(ld) * s,
+                                  log_deltas, state.sign_deltas)
 
-        return deltas, NTKEnsembleState(deltas, state.max_norm)
+        return deltas, NTKEnsembleState(state.sign_deltas, log_deltas, state.log_max_norm)
 
     return optax.GradientTransformation(init_fn, update_fn)

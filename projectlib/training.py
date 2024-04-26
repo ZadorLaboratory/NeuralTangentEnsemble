@@ -178,14 +178,18 @@ def create_train_step(loss_fn, batch_stats = False):
 def create_ntk_ensemble_train_step(loss_fn, use_current_params = True, batch_stats = False):
     # pull this out to avoid branching inside core train step
     if use_current_params:
-        def ntk_diff_center(current_params, deltas):
+        def ntk_diff_center(current_params, log_deltas, sign_deltas):
             # recompute inital parameters
+            deltas = jtu.tree_map(lambda ld, s: jnp.exp(ld) * s,
+                                  log_deltas, sign_deltas)
             init_params = jtu.tree_map(lambda p, d: p - d, current_params, deltas)
 
             return current_params, init_params
     else:
-        def ntk_diff_center(current_params, deltas):
+        def ntk_diff_center(current_params, log_deltas, sign_deltas):
             # recompute inital parameters
+            deltas = jtu.tree_map(lambda ld, s: jnp.exp(ld) * s,
+                                  log_deltas, sign_deltas)
             init_params = jtu.tree_map(lambda p, d: p - d, current_params, deltas)
 
             return init_params, init_params
@@ -205,7 +209,7 @@ def create_ntk_ensemble_train_step(loss_fn, use_current_params = True, batch_sta
                 return loss_fn(yhats, ys), aux
 
             # recompute inital parameters + choose ntk diff center
-            ntk_params, init_params = ntk_diff_center(state.params, state.opt_state.deltas)
+            ntk_params, init_params = ntk_diff_center(state.params, state.opt_state.log_deltas, state.opt_state.sign_deltas)
             # compute per example gradients around initial parameters
             grad_fn = jax.vmap(jax.value_and_grad(compute_loss, has_aux=True),
                                in_axes=(None, 0, 0))
@@ -230,7 +234,7 @@ def create_ntk_ensemble_train_step(loss_fn, use_current_params = True, batch_sta
                 return loss_fn(yhats, ys)
 
             # recompute inital parameters + choose ntk diff center
-            ntk_params, init_params = ntk_diff_center(state.params, state.opt_state.deltas)
+            ntk_params, init_params = ntk_diff_center(state.params, state.opt_state.log_deltas, state.opt_state.sign_deltas)
             # compute per example gradients around initial parameters
             grad_fn = jax.vmap(jax.value_and_grad(compute_loss),
                                in_axes=(None, 0, 0))
