@@ -324,9 +324,6 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
             if (step_log_interval is not None) and (i % step_log_interval == 0):
                 logger.log({"epoch": epoch, "step": i, "loss": loss},
                            commit=(i < epoch_len - 1))
-            # print(f"    step={i}, loss={loss}")
-            # if i >= 10:
-            #     raise
 
         # average metrics
         for metric, value in state.metrics.compute().items():
