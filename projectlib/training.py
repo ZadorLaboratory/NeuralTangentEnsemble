@@ -8,6 +8,7 @@ from clu import metrics
 from flax import struct
 from flax.training import train_state
 from typing import Dict, Any, Optional
+import wandb
 
 from projectlib.utils import maybe
 from projectlib.logging import PrintLogger
@@ -92,6 +93,16 @@ class MultitaskMetrics(MetricCollection):
                for i in range(n)}
         )
 
+def replace_zeros_with_noise(param, noise_level = 1e-3):
+    # Create a random key
+    key = jax.random.PRNGKey(0)
+    # Create a mask of the same shape as the parameter, which is True where the parameter is zero
+    mask = jnp.equal(param, 0)
+    # Generate random noise of the same shape as the parameter
+    noise = jax.random.normal(key, param.shape) * noise_level
+    # Replace zeros in the parameter with the corresponding values from the noise
+    return jnp.where(mask, noise, param)
+
 class TrainState(train_state.TrainState):
     metrics: Optional[MetricCollection] = None
     rngs: Dict[str, Array] = struct.field(default_factory=dict)
@@ -104,6 +115,8 @@ class TrainState(train_state.TrainState):
             params = _init(rngs, *dummy_input)
         else:
             params = _init(rngs, dummy_input)
+
+        params = jtu.tree_map(replace_zeros_with_noise, params)
 
         return cls.create(apply_fn=model.apply,
                           params=params,
@@ -235,6 +248,7 @@ def create_ntk_ensemble_train_step(loss_fn, use_current_params = True, batch_sta
 
             # recompute inital parameters + choose ntk diff center
             ntk_params, init_params = ntk_diff_center(state.params, state.opt_state.log_deltas, state.opt_state.sign_deltas)
+            # jax.debug.print("init_params size {x}", x=jtu.tree_reduce(jnp.add, jtu.tree_map(lambda x: jnp.sum(x ** 2), init_params)))
             # compute per example gradients around initial parameters
             grad_fn = jax.vmap(jax.value_and_grad(compute_loss),
                                in_axes=(None, 0, 0))
@@ -310,7 +324,9 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
             if (step_log_interval is not None) and (i % step_log_interval == 0):
                 logger.log({"epoch": epoch, "step": i, "loss": loss},
                            commit=(i < epoch_len - 1))
-                # print(f"    step={i}, loss={loss}")
+            # print(f"    step={i}, loss={loss}")
+            # if i >= 10:
+            #     raise
 
         # average metrics
         for metric, value in state.metrics.compute().items():

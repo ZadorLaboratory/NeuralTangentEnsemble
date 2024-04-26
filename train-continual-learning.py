@@ -76,6 +76,9 @@ def main(cfg: DictConfig):
     dummy_input = jnp.ones((1, *cfg.data.shape))
     init_state = partial(TrainState.from_model, model, dummy_input, opt,
                          metrics=MultitaskMetrics.create(n=cfg.ntasks))
+    # make sure no parameters are zero
+    assert jnp.all(init_state(init_keys).params != 0)
+
     if cfg.nmodels > 1:
         train_state = jax.vmap(init_state)(init_keys)
     else:
