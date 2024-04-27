@@ -1,0 +1,8 @@
+name: neural-tangent-ensemble
+channels:
+- conda-forge
+- defaults
+dependencies:
+- python=3.11
+- pip
+- poetry=1.8
