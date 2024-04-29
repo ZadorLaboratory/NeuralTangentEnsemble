@@ -12,7 +12,30 @@ See the Overleaf document for the Algorithm.
 
 ## Current demonstrations
 
-The current implementation uses Pytorch `functools` to obtain per-example gradients via `vmap`. Using Shuffled MNIST as a testbed, there are demonstration notebooks for:
+### Jax
+#### Installation
+```bash
+# or replace micromamba with conda...but you should really use micromamba
+micromambda create -f environment.yaml
+
+# active environment
+mircromamba activate neural-tangent-ensemble
+
+# install deps
+poetry install --no-root
+```
+#### Running
+The Shuffled MNIST experiment can be run with:
+```bash
+# for backprop
+python train-continual-learning.py
+
+# for ntk
+python train-continual-learning.py optimizer=ntk-ensemble
+```
+### Pytorch demo notebooks
+
+This implementation uses Pytorch `functools` to obtain per-example gradients via `vmap`. Using Shuffled MNIST as a testbed, there are demonstration notebooks for:
  - `pytorch_demo/demo_bayes.ipynb`: Demonstrates the NTK ensemble idea.
  - `pytorch_demo/demo_pruning.ipynb`: Plays around with learning by ONLY pruning. 
  - `pytorch_demo/gradient alignment is the problem.ipynb`: Compares the gradients of the NTK ensemble with the gradients at initialization. The two can diverge rapidly.
