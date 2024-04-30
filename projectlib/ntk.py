@@ -27,7 +27,7 @@ class NTKEnsembleState(NamedTuple):
     log_deltas: FrozenDict[str, Array]
     log_max_norm: float
 
-def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3):
+def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3, epsilon = 1e-6):
     def init_fn(params):
         leaves, structure = jtu.tree_flatten(params)
         rng = jrng.PRNGKey(seed)
@@ -43,9 +43,13 @@ def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3):
         return NTKEnsembleState(sign_deltas, log_deltas, log_max_norm)
 
     def update_fn(grads, state: NTKEnsembleState, _ = None):
+        # get max sign_delta * grad
+        max_sign_delta_grad = jtu.tree_reduce(jnp.maximum, jtu.tree_map(lambda x,y: jnp.max(x*y), state.sign_deltas, grads))
+        inv_temp = inv_temperature / (max_sign_delta_grad + epsilon)
+        
         # compute ntk likelihood
         log_likelihood_fn = partial(log_ntk_likelihood,
-                                inv_temperature=inv_temperature,
+                                inv_temperature=inv_temp,
                                 log_max_norm=state.log_max_norm)
         log_likelihood = jtu.tree_map(log_likelihood_fn, state.sign_deltas, grads)
         # sum over batch
