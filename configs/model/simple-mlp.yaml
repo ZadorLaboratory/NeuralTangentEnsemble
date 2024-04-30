@@ -1,3 +1,4 @@
 _target_: projectlib.models.SimpleMLP
-features: [100000]
+features_per_layer: 10000
+nlayers: 2
 nclasses: 10

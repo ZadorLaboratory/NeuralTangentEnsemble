@@ -1,5 +1,6 @@
 _target_: projectlib.ntk.ntk_ensemble
-inv_temperature: 0.01
+inv_temperature: 0.1
 seed: 48879 # 0xBEEF
 max_delta: 0.1
 noise_scale: 0 # set to 0 to use initial parameters as delta
+epsilon: 1e-6
