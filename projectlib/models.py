@@ -16,15 +16,16 @@ class BaseModel(nn.Module):
 
 class SimpleMLP(BaseModel):
     """A simple MLP model."""
-    features: Sequence[int]
+    features_per_layer: int
+    nlayers: int
     nclasses: int
     dtype: Dtype = jnp.float32
 
     @nn.compact
     def __call__(self, x):
         x = flatten(x)
-        for feature in self.features:
-            x = nn.Dense(features=feature, dtype=self.dtype)(x)
+        for _ in range(self.nlayers):
+            x = nn.Dense(features=self.features_per_layer, dtype=self.dtype)(x)
             x = nn.relu(x)
         x = nn.Dense(features=self.nclasses)(x)
 

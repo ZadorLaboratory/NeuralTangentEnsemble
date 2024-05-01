@@ -12,7 +12,7 @@ nmodels: 1
 ntasks: 5
 checkpointing:
   path: checkpoints
-  rate: 50 # in epochs
+  rate: 5000 # in epochs
 training:
   nepochs: 2
   log_epochs: true

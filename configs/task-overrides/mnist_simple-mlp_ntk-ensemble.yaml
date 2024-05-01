@@ -1,5 +1,0 @@
-# @package _global_
-
-model:
-  features: [100000]
-  nclasses: 10

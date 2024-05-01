@@ -1,7 +1,0 @@
-# @package _global_
-
-model:
-  features: [100000]
-  nclasses: 10
-optimizer:
-  learning_rate: 0.01
