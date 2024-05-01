@@ -121,6 +121,10 @@ def main(cfg: DictConfig):
     logger = hydra.utils.instantiate(cfg.logger)
     logger.log_config(cfg)
 
+    # log num params
+    num_params = sum(jnp.prod(jnp.array(p.shape)) for p in jax.tree.leaves(train_state.params))
+    logger.log({"num_params":num_params})
+    
     # run training
     trace = train_state.metrics.init_history()
     for i, train_loader in enumerate(train_loaders):
