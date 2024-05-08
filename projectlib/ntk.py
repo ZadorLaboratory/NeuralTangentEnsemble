@@ -16,10 +16,8 @@ def perturb_params(rng, params, noise_fn = jrng.normal):
 
     return jtu.tree_unflatten(structure, leaves)
 
-def log_ntk_likelihood(sign_delta, grad, inv_temperature, log_max_norm):
-    # why is this not multiplied by log_max_norm?
-    log_likelihood = jnp.log1p( - inv_temperature * sign_delta * grad)
-
+def log_ntk_likelihood(sign_delta, grad, inv_temperature, log_max_norm, eta):
+    log_likelihood = eta * jnp.log1p( - inv_temperature * sign_delta * grad)
     return log_likelihood
 
 class NTKEnsembleState(NamedTuple):
@@ -27,7 +25,7 @@ class NTKEnsembleState(NamedTuple):
     log_deltas: FrozenDict[str, Array]
     log_max_norm: float
 
-def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3):
+def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3, eta = 1):
     def init_fn(params):
         leaves, structure = jtu.tree_flatten(params)
         rng = jrng.PRNGKey(seed)
@@ -46,7 +44,8 @@ def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3):
         # compute ntk likelihood
         log_likelihood_fn = partial(log_ntk_likelihood,
                                 inv_temperature=inv_temperature,
-                                log_max_norm=state.log_max_norm)
+                                log_max_norm=state.log_max_norm,
+                                eta=eta)
         log_likelihood = jtu.tree_map(log_likelihood_fn, state.sign_deltas, grads)
         # sum over batch
         log_likelihood = jtu.tree_map(lambda l: jnp.sum(l, axis=0), log_likelihood)   
