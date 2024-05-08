@@ -136,6 +136,7 @@ def main(cfg: DictConfig):
                                  save_fn=ckpt_mgr.save,
                                  rng=rngs["train"],
                                  nepochs=cfg.training.nepochs,
+                                 nsteps=cfg.training.nsteps,
                                  start_epoch=(i * cfg.training.nepochs),
                                  metric_history=trace,
                                  logger=logger,

@@ -278,6 +278,7 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
         rng = None,
         save_fn = None,
         nepochs = 1,
+        nsteps = None,
         start_epoch = 0,
         epoch_logging = True,
         step_log_interval = 100,
@@ -310,6 +311,9 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
     ckpt = {"train_state": state, "metrics_history": metric_history}
     save_fn(start_epoch, args=ocp.args.StandardSave(ckpt), force=True)
 
+    if nsteps is not None:
+        nepochs = nsteps // len(data["train"]) + 1
+
     epoch_len = len(data["train"])
     for epoch in range(start_epoch, start_epoch + nepochs):
         # run epoch
@@ -324,6 +328,8 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
             if (step_log_interval is not None) and (i % step_log_interval == 0):
                 logger.log({"epoch": epoch, "step": i, "loss": loss},
                            commit=(i < epoch_len - 1))
+            if nsteps is not None and state.current_step >= nsteps:
+                break
 
         # average metrics
         for metric, value in state.metrics.compute().items():
@@ -368,5 +374,8 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
                     # "hparams": get_hparams(state.opt_state),
                     "train metrics": train_logs,
                     "test metrics": test_logs})
+
+        if start_epoch == 0:
+            logger.log({"single_task": test_logs})
 
     return state, metric_history
