@@ -369,13 +369,19 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
         else:
             train_logs = {}
             test_logs = {}
-        logger.log({"epoch": epoch,
+
+        if start_epoch == 0:
+            logger.log({"epoch": epoch,
+                    "step": epoch_len - 1,
+                    # "hparams": get_hparams(state.opt_state),
+                    "train metrics": train_logs,
+                    "test metrics": test_logs,
+                    "single_task": test_logs})
+        else:
+            logger.log({"epoch": epoch,
                     "step": epoch_len - 1,
                     # "hparams": get_hparams(state.opt_state),
                     "train metrics": train_logs,
                     "test metrics": test_logs})
-
-        if start_epoch == 0:
-            logger.log({"single_task": test_logs})
 
     return state, metric_history
