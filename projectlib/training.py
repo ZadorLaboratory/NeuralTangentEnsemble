@@ -330,6 +330,8 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
                            commit=(i < epoch_len - 1))
             if nsteps is not None and state.current_step >= nsteps:
                 break
+            # if state.current_step>5:
+            #     raise
 
         # average metrics
         for metric, value in state.metrics.compute().items():
@@ -382,6 +384,7 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
                     "step": epoch_len - 1,
                     # "hparams": get_hparams(state.opt_state),
                     "train metrics": train_logs,
-                    "test metrics": test_logs})
+                    "test metrics": test_logs,
+                    "opt_step": state.opt_state.current_step,})
 
     return state, metric_history

@@ -2,5 +2,6 @@ _target_: projectlib.ntk.ntk_ensemble
 inv_temperature: 0.01
 seed: 48879 # 0xBEEF
 max_delta: 0.1
-noise_scale: 0 # set to 0 to use initial parameters as delta
+scale_param: 0.01
 eta: 1
+reset_taylor_steps: 1 # reset the center of the taylor expansion every this many steps. At 1, equivalent to SGD
