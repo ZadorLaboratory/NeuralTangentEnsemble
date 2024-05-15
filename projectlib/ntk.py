@@ -25,13 +25,12 @@ class NTKEnsembleState(NamedTuple):
     log_deltas: FrozenDict[str, Array]
     log_max_norm: float
 
-def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3, eta = 1):
+def ntk_ensemble(learning_rate, max_delta = None, noise_scale = 1e-3, eta = 1, update_freq_steps = 1):
     def init_fn(params):
         leaves, structure = jtu.tree_flatten(params)
-        rng = jrng.PRNGKey(seed)
         keys = jrng.split(rng, len(leaves))
         if noise_scale > 0:
-            leaves = [noise_scale * jrng.normal(k, p.shape, p.dtype)
+            leaves = [jnp.full_like(k, noise_scale, p.shape, p.dtype)
                       for p, k in zip(leaves, keys)]
         log_max_norm = jnp.log(sum(jnp.sum(jnp.abs(d)) for d in leaves))
         deltas = jtu.tree_unflatten(structure, leaves)
