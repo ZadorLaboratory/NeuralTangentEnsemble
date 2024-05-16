@@ -37,7 +37,7 @@ def ntk_ensemble(inv_temperature, scale_param, seed, max_delta = None, eta = 1, 
 
         leaves = [scale_param * jnp.sign(jrng.normal(k, p.shape, p.dtype))
                       for p, k in zip(leaves, keys)]
-        leaves = [jnp.full_like(p, -scale_param) for p in leaves] # make all deltas negative; make the net smaller
+        # leaves = [jnp.full_like(p, -scale_param) for p in leaves] # make all deltas negative; make the net smaller
         log_Z = jnp.log(sum(jnp.sum(jnp.abs(d)) for d in leaves))
 
         deltas = jtu.tree_unflatten(structure, leaves)

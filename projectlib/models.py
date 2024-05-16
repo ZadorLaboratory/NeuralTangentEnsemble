@@ -20,6 +20,7 @@ class SimpleMLP(BaseModel):
     nlayers: int
     nclasses: int
     dtype: Dtype = jnp.float32
+    alpha: float = 1.0
 
     @nn.compact
     def __call__(self, x):
@@ -29,7 +30,7 @@ class SimpleMLP(BaseModel):
             x = nn.relu(x)
         x = nn.Dense(features=self.nclasses)(x)
 
-        return x
+        return x * self.alpha
 
 class SimpleCNN(BaseModel):
     """A simple CNN model."""
@@ -38,6 +39,7 @@ class SimpleCNN(BaseModel):
     pooling_factor: int = 2
     use_bn: bool = False
     dtype: Dtype = jnp.float32
+    alpha: float = 1.0
 
     def has_batchnorm(self):
         return self.use_bn
@@ -62,4 +64,4 @@ class SimpleCNN(BaseModel):
         x = nn.relu(x)
         x = nn.Dense(features=self.nclasses)(x)
 
-        return x
+        return x * self.alpha

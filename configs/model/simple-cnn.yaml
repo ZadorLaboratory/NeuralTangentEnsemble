@@ -3,3 +3,4 @@ features: [32, 64]
 nclasses: 10
 pooling_factor: 2
 use_bn: false
+alpha: 1

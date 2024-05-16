@@ -384,7 +384,6 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
                     "step": epoch_len - 1,
                     # "hparams": get_hparams(state.opt_state),
                     "train metrics": train_logs,
-                    "test metrics": test_logs,
-                    "opt_step": state.opt_state.current_step,})
+                    "test metrics": test_logs,})
 
     return state, metric_history
