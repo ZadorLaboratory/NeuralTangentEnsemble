@@ -1,0 +1,7 @@
+_target_: projectlib.ntk.scaled_true_sgd
+learning_rate: 0.01
+renormalize: false
+seed: 48879 # 0xBEEF
+noise_scale: 0 # Initial perturbation from init. If 0, treats 0 as init.
+eta: 1
+max_delta: .1
