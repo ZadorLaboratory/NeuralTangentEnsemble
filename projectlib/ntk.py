@@ -32,8 +32,8 @@ class AdditiveNTEState(NamedTuple):
     deltas: FrozenDict[str, Array]
     Z: float
 
-def gradient_scale_products(grad, learning_rate):
-    gprod = jnp.prod(1 - learning_rate * grad, axis=0)
+def gradient_scale_products(grad, delta, learning_rate):
+    gprod = jnp.prod(1 - learning_rate * jnp.sign(delta) * grad, axis=0)
     return gprod
 
 def scaled_true_sgd(learning_rate, seed, renormalize=False, noise_scale=1e-3 ):
@@ -63,25 +63,41 @@ def scaled_true_sgd(learning_rate, seed, renormalize=False, noise_scale=1e-3 ):
         if noise_scale > 0:
             leaves = [noise_scale * jrng.normal(k, p.shape, p.dtype)
                       for p, k in zip(leaves, keys)]
-        # Z = sum(jnp.sum(jnp.abs(d)) for d in leaves)
+        Z = sum(jnp.sum(jnp.abs(d)) for d in leaves)
         # num_params = sum(jnp.prod(jnp.array(p.shape)) for p in jax.tree.leaves(params))
         # desired_Z = jnp.sqrt(num_params * learning_rate)
         # leaves = leaves * desired_Z / Z
         deltas = jtu.tree_unflatten(structure, leaves) 
                
-        return AdditiveNTEState(deltas, 0)
+        return AdditiveNTEState(deltas, Z)
 
-    def update_fn(grads, state: AdditiveNTEState, _=None):
+    def update_fn_normalized(grads, state: AdditiveNTEState, _=None):
 
         prod_fn = partial(gradient_scale_products,
                           learning_rate=learning_rate)
-        grads_product = jtu.tree_map(prod_fn, grads)
+        grads_product = jtu.tree_map(prod_fn, grads, state.deltas)
+
+        deltas = jtu.tree_map(lambda dp, prod_: dp*prod_, state.deltas, grads_product)
+
+        new_Z = sum(jnp.sum(jnp.abs(d)) for d in jtu.tree_leaves(deltas))
+        deltas = jtu.tree_map(lambda dp: dp * state.Z / new_Z, deltas)
+        
+        return deltas, AdditiveNTEState(deltas, state.Z)
+
+    def update_fn_unnormalized(grads, state: AdditiveNTEState, _=None):
+
+        prod_fn = partial(gradient_scale_products,
+                          learning_rate=learning_rate)
+        grads_product = jtu.tree_map(prod_fn, grads, state.deltas)
 
         deltas = jtu.tree_map(lambda dp, prod_: dp*prod_, state.deltas, grads_product)
         
         return deltas, AdditiveNTEState(deltas, state.Z)
 
-    return optax.GradientTransformation(init_fn, update_fn)
+    if renormalize:
+        return optax.GradientTransformation(init_fn, update_fn_normalized)
+    else:
+        return optax.GradientTransformation(init_fn, update_fn_unnormalized)
 
 def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3, eta = 1):
     def init_fn(params):
