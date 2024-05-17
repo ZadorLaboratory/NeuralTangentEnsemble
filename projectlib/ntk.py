@@ -7,7 +7,6 @@ from flax.core import FrozenDict
 from typing import NamedTuple
 from functools import partial
 from optax._src import base
-from optax.transform import _init_empty_state
 from typing import Callable, Any
 
 from projectlib.models import Array
@@ -27,36 +26,36 @@ class NTKEnsembleState(NamedTuple):
     sign_deltas: FrozenDict[str, Array]
     log_deltas: FrozenDict[str, Array]
     log_max_norm: float
+    deltas: FrozenDict[str, Array] # yes this is redundant. will fix later.
 
 class AdditiveNTEState(NamedTuple):
     deltas: FrozenDict[str, Array]
     Z: float
 
-def gradient_scale_products(grad, state, Z):
-    gprod = jnp.prod(1 - Z * grad, axis=0)
+def gradient_scale_products(grad, learning_rate):
+    gprod = jnp.prod(1 - learning_rate * grad, axis=0)
     return gprod
 
-def scaled_true_SGD(
-    learning_rate: base.ScalarOrSchedule,
-    noise_scale=1e-3
-):
-  r"""An additive version of the NTE update rule
-  i.e. true stochastic Gradient Descent (SGD) optimizer in which the updates are scaled by the magnitude of
-  updates so far - and where the batch size is always 1.
-  Through the magic of vmap, we can run several examples at a time.
-  Note this implies the same network is used to get the gradient of k examples.
+def scaled_true_sgd(learning_rate, seed, renormalize=False, noise_scale=1e-3 ):
+    r"""An additive version of the NTE update rule
+    i.e. true stochastic Gradient Descent (SGD) optimizer in which the updates are scaled by the magnitude of
+    updates so far - and where the batch size is always 1.
+    Through the magic of vmap, we can run several examples at a time.
+    Note this implies the same network is used to get the gradient of k examples.
 
-  Assumes that the first dimension of grads is vmapped over examples.
+    Assumes that the first dimension of grads is vmapped over examples.
 
-  We implement the following update rule which 
-   scales the learning rate by the magnitude of the change in the weights since init.
-  Defining ∆W_t = w_t - w_0, 
-                            ∆w_t = ∆w_{t-1} - Z |∆w_{t-1}|) grad_i
-                        =>  ∆w_t = ∆w_{t-1}(1 - Z sign(∆W) grad_i)
+    We implement the following update rule which 
+    scales the learning rate by the magnitude of the change in the weights since init.
+    Defining ∆W_t = w_t - w_0, 
+                            ∆w_t = ∆w_{t-1} - eta |∆w_{t-1}|) grad_i
+                        =>  ∆w_t = ∆w_{t-1}(1 - eta sign(∆W) grad_i)
 
-  Z = ||∆W||_1 is calculated from learning_rate such that the average parameter's LR is the same as in SGD.
-  Z = sqrt(N * eta) for N = num_params
-  """
+    NOTE: this does not project the gradients to ensure the L1 norm of the ∆W stays fixed.
+
+    If noise_scale==0, we set w_0=0 and thus ∆w=w
+
+    """
     def init_fn(params):
         leaves, structure = jtu.tree_flatten(params)
         rng = jrng.PRNGKey(seed)
@@ -64,19 +63,19 @@ def scaled_true_SGD(
         if noise_scale > 0:
             leaves = [noise_scale * jrng.normal(k, p.shape, p.dtype)
                       for p, k in zip(leaves, keys)]
-        Z = sum(jnp.sum(jnp.abs(d)) for d in leaves)
-        num_params = sum(jnp.prod(jnp.array(p.shape)) for p in jax.tree.leaves(params))
-        desired_Z = jnp.sqrt(num_params * learning_rate)
-        leaves = leaves * desired_Z / Z
+        # Z = sum(jnp.sum(jnp.abs(d)) for d in leaves)
+        # num_params = sum(jnp.prod(jnp.array(p.shape)) for p in jax.tree.leaves(params))
+        # desired_Z = jnp.sqrt(num_params * learning_rate)
+        # leaves = leaves * desired_Z / Z
         deltas = jtu.tree_unflatten(structure, leaves) 
                
-        return AdditiveNTEState(deltas, desired_Z)
+        return AdditiveNTEState(deltas, 0)
 
-  def update_fn(grads, state: AdditiveNTEState, _=None):
+    def update_fn(grads, state: AdditiveNTEState, _=None):
 
         prod_fn = partial(gradient_scale_products,
-                          Z=state.Z)
-        grads_product = jtu.tree_map(prod_fn, grads, state)
+                          learning_rate=learning_rate)
+        grads_product = jtu.tree_map(prod_fn, grads)
 
         deltas = jtu.tree_map(lambda dp, prod_: dp*prod_, state.deltas, grads_product)
         
@@ -97,7 +96,7 @@ def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3, et
         sign_deltas = jtu.tree_map(lambda d: jnp.asarray(jnp.sign(d), dtype=jax.numpy.int8), deltas) # int8 but in theory could be a single bit per param, e.g. signbit plus later logic
         log_deltas = jtu.tree_map(jnp.log, jtu.tree_map(jnp.abs, deltas))
         
-        return NTKEnsembleState(sign_deltas, log_deltas, log_max_norm)
+        return NTKEnsembleState(sign_deltas, log_deltas, log_max_norm, deltas)
 
     def update_fn(grads, state: NTKEnsembleState, _ = None):
         # compute ntk likelihood
@@ -125,6 +124,6 @@ def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3, et
         deltas = jtu.tree_map(lambda ld, s: jnp.exp(ld) * s,
                                   log_deltas, state.sign_deltas)
 
-        return deltas, NTKEnsembleState(state.sign_deltas, log_deltas, state.log_max_norm)
+        return deltas, NTKEnsembleState(state.sign_deltas, log_deltas, state.log_max_norm, deltas)
 
     return optax.GradientTransformation(init_fn, update_fn)
