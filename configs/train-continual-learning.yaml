@@ -4,7 +4,7 @@ defaults:
 - data: mnist
 - optimizer: sgd
 - _self_
-- optional task-overrides: ${data}_${model}_${optimizer}
+- optional task-overrides: ${model}_${data}_${optimizer}
 
 seed: 42
 data_seed: 0 # added to seed

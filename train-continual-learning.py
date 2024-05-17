@@ -9,7 +9,6 @@ import jax.random as jrng
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import optax
-import seaborn as sns
 import hydra
 import orbax.checkpoint as ocp
 from omegaconf import DictConfig, ListConfig, OmegaConf

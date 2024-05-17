@@ -1,0 +1,3 @@
+_target_: projectlib.models.ResNet18
+num_classes: 1000
+num_filters: 256

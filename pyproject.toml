@@ -2,7 +2,7 @@
 name = "neural-tangent-ensemble"
 version = "0.1.0"
 description = ""
-authors = ["Ari Benjamin <benjami@cshl.edu"]
+authors = ["Ari Benjamin <benjami@cshl.edu>"]
 license = "MIT"
 readme = "README.md"
 

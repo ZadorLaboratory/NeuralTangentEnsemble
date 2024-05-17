@@ -1,0 +1,8 @@
+# @package _global_
+
+defaults:
+- simple-cnn_mnist
+- _self_
+
+optimizer:
+  inv_temperature: 0.05
