@@ -308,9 +308,10 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
     save_fn(start_epoch, args=ocp.args.StandardSave(ckpt), force=True)
 
     if nsteps is not None:
-        nepochs = nsteps // len(data["train"]) + 1
+        nepochs = jnp.ceil(nsteps / len(data["train"]))
 
     epoch_len = len(data["train"])
+    current_step = 0
     for epoch in range(start_epoch, start_epoch + nepochs):
         # run epoch
         for i, batch in enumerate(data["train"].as_numpy_iterator()):
@@ -321,10 +322,11 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
             loss, state = step_fn(state, batch, rng_step)
             state = metrics_fn(state, batch, rng_metric)
             state = state.replace(current_step=(state.current_step + 1))
+            current_step += 1
             if (step_log_interval is not None) and (i % step_log_interval == 0):
                 logger.log({"epoch": epoch, "step": i, "loss": loss},
                            commit=(i < epoch_len - 1))
-            if nsteps is not None and state.current_step >= nsteps:
+            if nsteps is not None and current_step >= nsteps:
                 break
 
         # average metrics
