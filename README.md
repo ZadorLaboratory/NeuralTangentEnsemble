@@ -30,29 +30,14 @@ The Shuffled MNIST experiment can be run with:
 # for backprop
 python train-continual-learning.py
 
-# for ntk
+# for nte
 python train-continual-learning.py optimizer=ntk-ensemble
 ```
+
+Check out the configs for more options about hyperparameters, tasks, etc. All configurations are managed with Hydra.
 ### Pytorch demo notebooks
 
 This implementation uses Pytorch `functools` to obtain per-example gradients via `vmap`. Using Shuffled MNIST as a testbed, there are demonstration notebooks for:
  - `pytorch_demo/demo_bayes.ipynb`: Demonstrates the NTK ensemble idea.
  - `pytorch_demo/demo_pruning.ipynb`: Plays around with learning by ONLY pruning. 
  - `pytorch_demo/gradient alignment is the problem.ipynb`: Compares the gradients of the NTK ensemble with the gradients at initialization. The two can diverge rapidly.
-
-## Wish list of experiments
-
-
-- Figures that show algorithm works quite well for single-task learning.
-    - For modern architectures, including Transformers and large CNNs, ...
-    - For interesting tasks, including ImageNet, ...
-- We can do continual learning.
-    - Shuffled MNIST results
-    - ImageNet but where you train on 100 classes at a time
-- Things get better as you scale the network. Plots of performance vs scale for...
-    - single-task performance
-    - continual learning
-- For good practice, a hyperparameter sweep.
-  - e.g. a 2D plot of single-task performance varying temperature and max_parameter_size (or whatever we use to keep parameters small)
-- Continual learning with the NTE rule after pre-training a large model with SGD.
-- Proof that you want the gradients to not change much (like the demo notebook `gradient alignment...")
