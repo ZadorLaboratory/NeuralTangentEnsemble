@@ -33,7 +33,7 @@ class AdditiveNTEState(NamedTuple):
     Z: float
 
 def gradient_scale_products(grad, delta, learning_rate, eta):
-    gprod = jnp.prod(1 - learning_rate * jnp.sign(delta) * grad, axis=0)**eta
+    gprod = jnp.prod(1 - learning_rate / jnp.sign(delta) * grad, axis=0)
     return gprod
 
 def scaled_true_sgd(learning_rate, seed, renormalize=False, noise_scale=1e-3, eta=1.0, max_delta=10):
