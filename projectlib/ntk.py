@@ -6,6 +6,8 @@ import optax
 from flax.core import FrozenDict
 from typing import NamedTuple
 from functools import partial
+from optax._src import base
+from typing import Callable, Any
 
 from projectlib.models import Array
 
@@ -24,6 +26,76 @@ class NTKEnsembleState(NamedTuple):
     sign_deltas: FrozenDict[str, Array]
     log_deltas: FrozenDict[str, Array]
     log_max_norm: float
+    deltas: FrozenDict[str, Array] # yes this is redundant. will fix later.
+
+class AdditiveNTEState(NamedTuple):
+    deltas: FrozenDict[str, Array]
+    Z: float
+
+def gradient_scale_products(grad, delta, learning_rate, eta):
+    gprod = jnp.prod(1 - learning_rate / jnp.sign(delta) * grad, axis=0)
+    return gprod
+
+def scaled_true_sgd(learning_rate, seed, renormalize=False, noise_scale=1e-3, eta=1.0, max_delta=10):
+    r"""An additive version of the NTE update rule
+    i.e. true stochastic Gradient Descent (SGD) optimizer in which the updates are scaled by the magnitude of
+    updates so far - and where the batch size is always 1.
+    Through the magic of vmap, we can run several examples at a time.
+    Note this implies the same network is used to get the gradient of k examples.
+
+    Assumes that the first dimension of grads is vmapped over examples.
+
+    We implement the following update rule which 
+    scales the learning rate by the magnitude of the change in the weights since init.
+    Defining ∆W_t = w_t - w_0, 
+                            ∆w_t = ∆w_{t-1} - lr |∆w_{t-1}|) grad_i
+                        =>  ∆w_t = ∆w_{t-1}(1 - lr sign(∆W) grad_i)**eta
+
+    NOTE: this does not project the gradients to ensure the L1 norm of the ∆W stays fixed.
+
+    If noise_scale==0, we set w_0=0 and thus ∆w=w
+
+    """
+    def init_fn(params):
+        leaves, structure = jtu.tree_flatten(params)
+        rng = jrng.PRNGKey(seed)
+        keys = jrng.split(rng, len(leaves))
+        if noise_scale > 0:
+            leaves = [noise_scale * jrng.normal(k, p.shape, p.dtype)
+                      for p, k in zip(leaves, keys)]
+        Z = sum(jnp.sum(jnp.abs(d)) for d in leaves)
+        deltas = jtu.tree_unflatten(structure, leaves) 
+        return AdditiveNTEState(deltas, Z)
+
+    def update_fn_normalized(grads, state: AdditiveNTEState, _=None):
+
+        prod_fn = partial(gradient_scale_products,
+                          learning_rate=learning_rate,
+                          eta=eta)
+        grads_product = jtu.tree_map(prod_fn, grads, state.deltas)
+
+        deltas = jtu.tree_map(lambda dp, prod_: dp*prod_, state.deltas, grads_product)
+
+        new_Z = sum(jnp.sum(jnp.abs(d)) for d in jtu.tree_leaves(deltas))
+        deltas = jtu.tree_map(lambda dp: jnp.clip(dp * state.Z / new_Z, a_max=max_delta, a_min=-max_delta), deltas)
+        
+        return deltas, AdditiveNTEState(deltas, state.Z)
+
+    def update_fn_unnormalized(grads, state: AdditiveNTEState, _=None):
+
+        prod_fn = partial(gradient_scale_products,
+                          learning_rate=learning_rate,
+                          eta=eta)
+        grads_product = jtu.tree_map(prod_fn, grads, state.deltas)
+
+        deltas = jtu.tree_map(lambda dp, prod_: jnp.clip(dp*prod_, a_max=max_delta, a_min=-max_delta), state.deltas, grads_product)
+    
+        return deltas, AdditiveNTEState(deltas, state.Z)
+
+    if renormalize:
+        return optax.GradientTransformation(init_fn, update_fn_normalized)
+    else:
+        return optax.GradientTransformation(init_fn, update_fn_unnormalized)
 
 def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3, eta = 1):
     def init_fn(params):
@@ -38,7 +110,7 @@ def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3, et
         sign_deltas = jtu.tree_map(lambda d: jnp.asarray(jnp.sign(d), dtype=jax.numpy.int8), deltas) # int8 but in theory could be a single bit per param, e.g. signbit plus later logic
         log_deltas = jtu.tree_map(jnp.log, jtu.tree_map(jnp.abs, deltas))
         
-        return NTKEnsembleState(sign_deltas, log_deltas, log_max_norm)
+        return NTKEnsembleState(sign_deltas, log_deltas, log_max_norm, deltas)
 
     def update_fn(grads, state: NTKEnsembleState, _ = None):
         # compute ntk likelihood
@@ -66,6 +138,6 @@ def ntk_ensemble(inv_temperature, seed, max_delta = None, noise_scale = 1e-3, et
         deltas = jtu.tree_map(lambda ld, s: jnp.exp(ld) * s,
                                   log_deltas, state.sign_deltas)
 
-        return deltas, NTKEnsembleState(state.sign_deltas, log_deltas, state.log_max_norm)
+        return deltas, NTKEnsembleState(state.sign_deltas, log_deltas, state.log_max_norm, deltas)
 
     return optax.GradientTransformation(init_fn, update_fn)
