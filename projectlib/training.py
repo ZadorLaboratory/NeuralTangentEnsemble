@@ -270,7 +270,6 @@ def evaluate_metrics(state: TrainState, loaders, metrics_fn, rng, rng_split = jr
     return state
 
 def fit(data, state: TrainState, step_fn, metrics_fn,
-        suffix='',
         rng = None,
         save_fn = None,
         nepochs = 1,
@@ -308,7 +307,7 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
     save_fn(start_epoch, args=ocp.args.StandardSave(ckpt), force=True)
 
     if nsteps is not None:
-        nepochs = jnp.ceil(nsteps / len(data["train"]))
+        nepochs = int(jnp.ceil(nsteps / len(data["train"])))
 
     epoch_len = len(data["train"])
     current_step = 0
