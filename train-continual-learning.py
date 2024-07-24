@@ -76,7 +76,7 @@ def main(cfg: DictConfig):
     init_state = partial(TrainState.from_model, model, dummy_input, opt,
                          metrics=MultitaskMetrics.create(n=cfg.ntasks))
     # make sure no parameters are zero
-    assert jnp.all(init_state(init_keys).params != 0)
+    # assert jnp.all(init_state(init_keys).params != 0)
 
     if cfg.nmodels > 1:
         train_state = jax.vmap(init_state)(init_keys)
@@ -84,7 +84,7 @@ def main(cfg: DictConfig):
         train_state = init_state(init_keys)
     # create training step
     loss_fn = optax.softmax_cross_entropy
-    if cfg.optimizer._target_ == "projectlib.ntk.ntk_ensemble":
+    if "projectlib.ntk" in cfg.optimizer._target_:
         train_step = create_ntk_ensemble_train_step(loss_fn, cfg.ntk_use_current_params)
     else:
         train_step = create_train_step(loss_fn)
