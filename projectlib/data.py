@@ -97,6 +97,13 @@ class StaticShuffle:
             for k, v in features.items()
         }
 
+@dataclass
+class SelectFeatures:
+    features: Sequence[str]
+
+    def __call__(self, features):
+        return {k: features[k] for k in self.features}
+
 def default_data_transforms(dataset):
     if dataset == "mnist":
         return PreprocessFn([ToFloat(),
@@ -104,14 +111,16 @@ def default_data_transforms(dataset):
                              OneHot(10)],
                             only_jax_types=True)
     elif dataset == "cifar10":
-        return PreprocessFn([RandomCrop((32, 32), (2, 2)),
+        return PreprocessFn([SelectFeatures(("image", "label")),
+                             RandomCrop((32, 32), (2, 2)),
                              RandomFlipLR(),
                              ToFloat(),
                              Standardize((0.4914, 0.4822, 0.4465),
                                          (0.247, 0.243, 0.261)),
                              OneHot(10)], only_jax_types=True)
     elif dataset == "cifar100":
-        return PreprocessFn([RandomCrop((32, 32), (2, 2)),
+        return PreprocessFn([SelectFeatures(("image", "label")),
+                             RandomCrop((32, 32), (2, 2)),
                              RandomFlipLR(),
                              ToFloat(),
                              Standardize((0.5071, 0.4865, 0.4409),
