@@ -110,6 +110,13 @@ def default_data_transforms(dataset):
                              Standardize((0.4914, 0.4822, 0.4465),
                                          (0.247, 0.243, 0.261)),
                              OneHot(10)], only_jax_types=True)
+    elif dataset == "cifar100":
+        return PreprocessFn([RandomCrop((32, 32), (2, 2)),
+                             RandomFlipLR(),
+                             ToFloat(),
+                             Standardize((0.5071, 0.4865, 0.4409),
+                                         (0.2673, 0.2564, 0.2762)),
+                             OneHot(100)], only_jax_types=True)
     else:
         return None
 
