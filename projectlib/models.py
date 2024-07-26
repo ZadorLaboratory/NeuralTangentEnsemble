@@ -139,7 +139,7 @@ class ResNet(BaseModel):
 
     stage_sizes: Sequence[int]
     block_cls: ModuleDef
-    num_classes: int
+    nclasses: int
     num_filters: int = 64
     dtype: Any = jnp.float32
     act: Callable = nn.relu
@@ -180,7 +180,7 @@ class ResNet(BaseModel):
                     act=self.act,
                 )(x)
         x = jnp.mean(x, axis=(1, 2))
-        x = nn.Dense(self.num_classes, dtype=self.dtype)(x)
+        x = nn.Dense(self.nclasses, dtype=self.dtype)(x)
         x = jnp.asarray(x, self.dtype)
         return x
 
