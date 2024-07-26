@@ -121,6 +121,19 @@ def select_class_subset(data, classes, name = "label"):
 
     return _data if isinstance(data, dict) else _data["__data"]
 
+def force_dataset_length(data, length = None):
+    # get the length by counting if necessary
+    if (length is None) and data.cardinality() != tf.data.INFINITE_CARDINALITY:
+        length = data.reduce(0, lambda x, _: x + 1).numpy()
+    else:
+        raise RuntimeError("Cannot force the length of an infinite dataset by"
+                           " counting. Either pass in a known length or a"
+                           " dataset with finite or unknown cardinality.")
+    # assert the length of the dataset is known
+    data = data.apply(tf.data.experimental.assert_cardinality(length))
+
+    return data
+
 def build_dataloader(data,
                      batch_size = 1,
                      shuffle = True,

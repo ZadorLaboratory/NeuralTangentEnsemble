@@ -11,35 +11,58 @@ import tensorflow_datasets as tfds
 import optax
 import hydra
 import orbax.checkpoint as ocp
+import numpy as np
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from functools import partial, reduce
 from orbax.checkpoint import CheckpointManager, CheckpointManagerOptions
 from clu.preprocess_spec import PreprocessFn
 
 from projectlib.utils import setup_rngs
-from projectlib.data import build_dataloader, default_data_transforms, StaticShuffle
+from projectlib.data import (build_dataloader,
+                             select_class_subset,
+                             default_data_transforms,
+                             force_dataset_length,
+                             StaticShuffle)
 from projectlib.training import (MultitaskMetrics,
                                  TrainState,
                                  create_train_step,
                                  create_ntk_ensemble_train_step,
                                  fit)
 
-def generate_tasks(cfg):
+def generate_tasks(cfg, rng):
     data = tfds.load(cfg.data.dataset)
     perm_size = reduce(lambda x, y: x * y, cfg.data.shape)
     base_preprocess = default_data_transforms(cfg.data.dataset)
-    shuffle_preprocess = [PreprocessFn([StaticShuffle(perm_size, i)], only_jax_types=True)
-                          for i in range(cfg.ntasks)]
-    train_loaders = [build_dataloader(
-        data["train"],
-        batch_transform=base_preprocess + shuffle_preprocess[i],
-        batch_size=cfg.data.batchsize
-    ) for i in range(cfg.ntasks)]
-    test_loaders = [build_dataloader(
-        data["test"],
-        batch_transform=base_preprocess + shuffle_preprocess[i],
-        batch_size=cfg.data.batchsize
-    ) for i in range(cfg.ntasks)]
+
+    if cfg.task_style == "shuffle":
+        shuffle_preprocess = [PreprocessFn([StaticShuffle(perm_size, i)], only_jax_types=True)
+                              for i in range(cfg.ntasks)]
+        train_loaders = [build_dataloader(
+            data["train"],
+            batch_transform=base_preprocess + shuffle_preprocess[i],
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+        test_loaders = [build_dataloader(
+            data["test"],
+            batch_transform=base_preprocess + shuffle_preprocess[i],
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+    elif cfg.task_style == "class_subset":
+        class_subsets = jrng.permutation(rng, jnp.asarray(cfg.data.classes),
+                                         independent=True)
+        class_subsets = jnp.array_split(class_subsets, cfg.ntasks)
+        train_loaders = [build_dataloader(
+            force_dataset_length(select_class_subset(data["train"],
+                                                     class_subsets[i])),
+            batch_transform=base_preprocess,
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+        test_loaders = [build_dataloader(
+            force_dataset_length(select_class_subset(data["test"],
+                                                     class_subsets[i])),
+            batch_transform=base_preprocess,
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
 
     return train_loaders, test_loaders
 
@@ -55,15 +78,16 @@ def main(cfg: DictConfig):
 
     # setup rngs
     if cfg.nmodels > 1:
-        seeds = jrng.split(jrng.PRNGKey(cfg.seed), cfg.nmodels)
-        rngs = jax.vmap(setup_rngs)(seeds)
+        seeds = jrng.split(jrng.PRNGKey(cfg.seed), cfg.nmodels + 1)
+        rngs = jax.vmap(setup_rngs)(seeds[:-1])
+        rngs["tasks"] = seeds[-1] # task rng is same across models
     else:
-        rngs = setup_rngs(cfg.seed)
+        rngs = setup_rngs(cfg.seed, keys=["model", "train", "tasks"])
     # initialize randomness
     tf.random.set_seed(cfg.seed) # deterministic data iteration
 
     # setup dataloaders
-    train_loaders, test_loaders = generate_tasks(cfg)
+    train_loaders, test_loaders = generate_tasks(cfg, rngs["tasks"])
 
     # setup model
     model = hydra.utils.instantiate(cfg.model)
