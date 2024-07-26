@@ -110,6 +110,13 @@ def default_data_transforms(dataset):
                              Standardize((0.4914, 0.4822, 0.4465),
                                          (0.247, 0.243, 0.261)),
                              OneHot(10)], only_jax_types=True)
+    elif dataset == "cifar100":
+        return PreprocessFn([RandomCrop((32, 32), (2, 2)),
+                             RandomFlipLR(),
+                             ToFloat(),
+                             Standardize((0.5071, 0.4865, 0.4409),
+                                         (0.2673, 0.2564, 0.2762)),
+                             OneHot(100)], only_jax_types=True)
     else:
         return None
 
@@ -120,6 +127,19 @@ def select_class_subset(data, classes, name = "label"):
              for k, v in _data.items()}
 
     return _data if isinstance(data, dict) else _data["__data"]
+
+def force_dataset_length(data, length = None):
+    # get the length by counting if necessary
+    if (length is None) and data.cardinality() != tf.data.INFINITE_CARDINALITY:
+        length = data.reduce(0, lambda x, _: x + 1).numpy()
+    else:
+        raise RuntimeError("Cannot force the length of an infinite dataset by"
+                           " counting. Either pass in a known length or a"
+                           " dataset with finite or unknown cardinality.")
+    # assert the length of the dataset is known
+    data = data.apply(tf.data.experimental.assert_cardinality(length))
+
+    return data
 
 def build_dataloader(data,
                      batch_size = 1,

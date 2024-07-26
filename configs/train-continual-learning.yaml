@@ -10,6 +10,7 @@ seed: 42
 data_seed: 0 # added to seed
 nmodels: 1
 ntasks: 5
+task_style: shuffle
 checkpointing:
   path: checkpoints
   rate: 5000 # in epochs
