@@ -19,7 +19,7 @@ from clu.preprocess_spec import PreprocessFn
 
 from projectlib.utils import setup_rngs
 from projectlib.data import (build_dataloader,
-                             select_class_subset,
+                             select_class_subset_and_make_contiguous,
                              default_data_transforms,
                              force_dataset_length,
                              StaticShuffle)
@@ -32,9 +32,10 @@ from projectlib.training import (MultitaskMetrics,
 def generate_tasks(cfg, rng):
     data = tfds.load(cfg.data.dataset)
     perm_size = reduce(lambda x, y: x * y, cfg.data.shape)
-    base_preprocess = default_data_transforms(cfg.data.dataset)
 
     if cfg.task_style == "shuffle":
+        base_preprocess = default_data_transforms(cfg.data.dataset)
+
         shuffle_preprocess = [PreprocessFn([StaticShuffle(perm_size, i)], only_jax_types=True)
                               for i in range(cfg.ntasks)]
         train_loaders = [build_dataloader(
@@ -48,17 +49,20 @@ def generate_tasks(cfg, rng):
             batch_size=cfg.data.batchsize
         ) for i in range(cfg.ntasks)]
     elif cfg.task_style == "class_subset":
+        base_preprocess = default_data_transforms(cfg.data.dataset, len(cfg.data.classes) // cfg.ntasks)
+        assert len(cfg.data.classes) % cfg.ntasks == 0, "Number of classes must be divisible by number of tasks"
+
         class_subsets = jrng.permutation(rng, jnp.asarray(cfg.data.classes),
                                          independent=True)
         class_subsets = jnp.array_split(class_subsets, cfg.ntasks)
         train_loaders = [build_dataloader(
-            force_dataset_length(select_class_subset(data["train"],
+            force_dataset_length(select_class_subset_and_make_contiguous(data["train"],
                                                      class_subsets[i])),
             batch_transform=base_preprocess,
             batch_size=cfg.data.batchsize
         ) for i in range(cfg.ntasks)]
         test_loaders = [build_dataloader(
-            force_dataset_length(select_class_subset(data["test"],
+            force_dataset_length(select_class_subset_and_make_contiguous(data["test"],
                                                      class_subsets[i])),
             batch_transform=base_preprocess,
             batch_size=cfg.data.batchsize
@@ -100,7 +104,7 @@ def main(cfg: DictConfig):
     init_state = partial(TrainState.from_model, model, dummy_input, opt,
                          metrics=MultitaskMetrics.create(n=cfg.ntasks))
     # make sure no parameters are zero
-    # assert jnp.all(init_state(init_keys).params != 0)
+    assert jnp.all(init_state(init_keys).params != 0)
 
     if cfg.nmodels > 1:
         train_state = jax.vmap(init_state)(init_keys)
