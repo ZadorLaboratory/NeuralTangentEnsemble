@@ -8,7 +8,7 @@ Motivated by the problem of continual learning, and also by the biological obser
   c. If you expand around the origin, the weights themselves (rather than the change) become the weights in the ensemble.
 2. This interpretation gives you a learning rule which is, arguably, more biological. First, it is multiplicative, so positive weights stay positive and negative weights stay negative. Second, it gives you a way of thinking about pruning.
 
-See the Overleaf document for the Algorithm.
+See the manuscript document for the Algorithm.
 
 ## Current demonstrations
 
@@ -16,10 +16,10 @@ See the Overleaf document for the Algorithm.
 #### Installation
 ```bash
 # or replace micromamba with conda...but you should really use micromamba
-micromambda create -f environment.yaml
+micromamba create -f environment.yaml
 
 # active environment
-mircromamba activate neural-tangent-ensemble
+micromamba activate neural-tangent-ensemble
 
 # install deps
 poetry install --no-root
@@ -40,19 +40,3 @@ This implementation uses Pytorch `functools` to obtain per-example gradients via
  - `pytorch_demo/demo_pruning.ipynb`: Plays around with learning by ONLY pruning. 
  - `pytorch_demo/gradient alignment is the problem.ipynb`: Compares the gradients of the NTK ensemble with the gradients at initialization. The two can diverge rapidly.
 
-## Wish list of experiments
-
-
-- Figures that show algorithm works quite well for single-task learning.
-    - For modern architectures, including Transformers and large CNNs, ...
-    - For interesting tasks, including ImageNet, ...
-- We can do continual learning.
-    - Shuffled MNIST results
-    - ImageNet but where you train on 100 classes at a time
-- Things get better as you scale the network. Plots of performance vs scale for...
-    - single-task performance
-    - continual learning
-- For good practice, a hyperparameter sweep.
-  - e.g. a 2D plot of single-task performance varying temperature and max_parameter_size (or whatever we use to keep parameters small)
-- Continual learning with the NTE rule after pre-training a large model with SGD.
-- Proof that you want the gradients to not change much (like the demo notebook `gradient alignment...")
