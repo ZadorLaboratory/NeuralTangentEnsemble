@@ -133,12 +133,12 @@ def main(cfg: DictConfig):
     else:
         train_state = init_state(init_keys)
     # create training step
-    loss_fn = optax.safe_softmax_cross_entropy
+    loss_fn = optax.softmax_cross_entropy
     if "projectlib.ntk" in cfg.optimizer._target_:
         train_step = create_ntk_ensemble_train_step(loss_fn, cfg.ntk_use_current_params)
     else:
         train_step = create_train_step(loss_fn)
-    @partial(jax.jit, static_argnums=4)
+    @partial(jax.jit, static_argnums=3)
     def metric_step(state: TrainState, batch, _ = None, suffix = ""):
         xs, ys = batch
         ypreds = state.apply_fn(state.params, xs, rngs=state.rngs)
