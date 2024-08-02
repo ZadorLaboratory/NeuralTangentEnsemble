@@ -9,6 +9,7 @@ from flax import struct
 from flax.training import train_state
 from typing import Dict, Any, Optional
 import wandb
+import optax
 
 from projectlib.utils import maybe
 from projectlib.logging import PrintLogger
@@ -170,7 +171,7 @@ def create_train_step(loss_fn, batch_stats = False):
             state = state.apply_gradients(grads=grads)
             state = state.replace(params=state.params.copy(aux))
 
-            return loss, state
+            return loss, state, state.params
     else:
         @jax.jit
         def train_step(state: TrainState, batch, _ = None):
@@ -187,6 +188,7 @@ def create_train_step(loss_fn, batch_stats = False):
             return loss, state
 
     return train_step
+
 
 def create_ntk_ensemble_train_step(loss_fn, use_current_params = True, batch_stats = False):
     # pull this out to avoid branching inside core train step
@@ -298,7 +300,7 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
         metric_history["train"][metric].append(value)
     # evaluate initial test metrics
     if "test" in data.keys():
-        test_state = evaluate_metrics(state, data["train"], metrics_fn, rng, rng_split)
+        test_state = evaluate_metrics(state, data["train"], metrics_fn, rng,  rng_split)
         # average metrics
         for metric, value in test_state.metrics.compute().items():
             metric_history["test"][metric].append(value)
@@ -309,6 +311,7 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
     if nsteps is not None:
         nepochs = int(jnp.ceil(nsteps / len(data["train"])))
 
+
     epoch_len = len(data["train"])
     current_step = 0
     for epoch in range(start_epoch, start_epoch + nepochs):
@@ -318,8 +321,8 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
             rng, rng_step = rng_split(rng)
             rng_step, rng_metric = rng_split(rng_step)
             state = state.split_rngs()
-            loss, state = step_fn(state, batch, rng_step)
-            state = metrics_fn(state, batch, rng_metric)
+            loss, state,  = step_fn(state, batch,  rng_step)
+            state = metrics_fn(state, batch,  rng_metric)
             state = state.replace(current_step=(state.current_step + 1))
             current_step += 1
             if (step_log_interval is not None) and (i % step_log_interval == 0):

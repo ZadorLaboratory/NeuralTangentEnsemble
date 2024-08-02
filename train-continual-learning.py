@@ -20,6 +20,7 @@ from clu.preprocess_spec import PreprocessFn
 from projectlib.utils import setup_rngs
 from projectlib.data import (build_dataloader,
                              select_class_subset_and_make_contiguous,
+                             select_class_subset,
                              default_data_transforms,
                              force_dataset_length,
                              StaticShuffle)
@@ -48,7 +49,9 @@ def generate_tasks(cfg, rng):
             batch_transform=base_preprocess + shuffle_preprocess[i],
             batch_size=cfg.data.batchsize
         ) for i in range(cfg.ntasks)]
-    elif cfg.task_style == "class_subset":
+        class_subsets = [jnp.arange(len(cfg.data.classes)) for _ in range(cfg.ntasks)]
+
+    elif cfg.task_style == "domain-incremental":
         base_preprocess = default_data_transforms(cfg.data.dataset, len(cfg.data.classes) // cfg.ntasks)
         assert len(cfg.data.classes) % cfg.ntasks == 0, "Number of classes must be divisible by number of tasks"
 
@@ -68,7 +71,26 @@ def generate_tasks(cfg, rng):
             batch_size=cfg.data.batchsize
         ) for i in range(cfg.ntasks)]
 
+    elif cfg.task_style == "task-incremental":
+        base_preprocess = default_data_transforms(cfg.data.dataset, len(cfg.data.classes))
+        class_subsets = jrng.permutation(rng, jnp.asarray(cfg.data.classes),
+                                         independent=True)
+        class_subsets = jnp.array_split(class_subsets, cfg.ntasks)    
+        train_loaders = [build_dataloader(
+            force_dataset_length(select_class_subset(data["train"],
+                                                     class_subsets[i])),
+            batch_transform=base_preprocess,
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+        test_loaders = [build_dataloader(
+            force_dataset_length(select_class_subset(data["test"],
+                                                     class_subsets[i])),
+            batch_transform=base_preprocess,
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+
     return train_loaders, test_loaders
+
 
 @hydra.main(config_path="./configs", config_name="train-continual-learning", version_base=None)
 def main(cfg: DictConfig):
@@ -111,12 +133,12 @@ def main(cfg: DictConfig):
     else:
         train_state = init_state(init_keys)
     # create training step
-    loss_fn = optax.softmax_cross_entropy
+    loss_fn = optax.safe_softmax_cross_entropy
     if "projectlib.ntk" in cfg.optimizer._target_:
         train_step = create_ntk_ensemble_train_step(loss_fn, cfg.ntk_use_current_params)
     else:
         train_step = create_train_step(loss_fn)
-    @partial(jax.jit, static_argnums=3)
+    @partial(jax.jit, static_argnums=4)
     def metric_step(state: TrainState, batch, _ = None, suffix = ""):
         xs, ys = batch
         ypreds = state.apply_fn(state.params, xs, rngs=state.rngs)
@@ -156,7 +178,8 @@ def main(cfg: DictConfig):
     trace = train_state.metrics.init_history()
     for i, train_loader in enumerate(train_loaders):
         print(f"\nRUNNING Task {i}...")
-        train_state, trace = fit({"train": train_loader, "test": test_loaders},
+
+        train_state, trace = fit({"train": train_loader, "test": test_loaders,},
                                  train_state,
                                  train_step,
                                  partial(metric_step, suffix=f"_{i}"),
