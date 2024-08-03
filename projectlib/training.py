@@ -221,6 +221,8 @@ def create_ntk_ensemble_train_step(loss_fn, use_current_params = True, batch_sta
 
             # recompute inital parameters + choose ntk diff center
             ntk_params, init_params = ntk_diff_center(state.params, state.opt_state.deltas)
+            # broadcast mask to match batch size
+            softmax_mask = jnp.broadcast_to(softmax_mask, (xs.shape[0], *softmax_mask.shape))
             # compute per example gradients around initial parameters
             grad_fn = jax.vmap(jax.value_and_grad(compute_loss, has_aux=True),
                                in_axes=(None, 0, 0, 0))
@@ -246,6 +248,8 @@ def create_ntk_ensemble_train_step(loss_fn, use_current_params = True, batch_sta
 
             # recompute inital parameters + choose ntk diff center
             ntk_params, init_params = ntk_diff_center(state.params, state.opt_state.deltas)
+            # broadcast mask to match batch size
+            softmax_mask = jnp.broadcast_to(softmax_mask, (xs.shape[0], *softmax_mask.shape))
             # compute per example gradients around initial parameters
             grad_fn = jax.vmap(jax.value_and_grad(compute_loss),
                                in_axes=(None, 0, 0, 0))
