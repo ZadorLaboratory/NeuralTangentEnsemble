@@ -388,3 +388,15 @@ ConvNeXtSmall = partial(
     layer_scale_init_value = 1e-6,
     head_init_scale = 1.0
 )
+
+ConvNeXtBase = partial(
+    ConvNeXt,
+    depths=(3, 3, 27, 3),
+    dims=(96, 192, 384, 768),
+    drop_path=0.1,
+    attach_head=True,
+    deterministic=False,
+    layer_scale_init_value = 1e-6,
+    head_init_scale = 1.0
+)
+

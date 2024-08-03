@@ -6,7 +6,7 @@ defaults:
 - _self_
 - optional task-overrides: ${model}_${data}_${optimizer}
 
-seed: 42
+
 data_seed: 0 # added to seed
 nmodels: 1
 ntasks: 5

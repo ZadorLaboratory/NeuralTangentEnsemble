@@ -6,6 +6,8 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
 import jax
 import jax.numpy as jnp
 import jax.random as jrng
+from jax.nn import log_softmax
+
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import optax
@@ -114,8 +116,9 @@ def generate_tasks(cfg, rng):
 
 @jax.jit
 def masked_cross_entropy(logits, labels, mask):
-    masked_logits = logits * mask
-    return optax.softmax_cross_entropy(masked_logits, labels)
+    # Compute softmax only over unmasked elements
+    log_probs = log_softmax(logits, where=mask)
+    return -jnp.sum(labels * log_probs, axis=-1)
 
 @hydra.main(config_path="./configs", config_name="train-continual-learning", version_base=None)
 def main(cfg: DictConfig):
