@@ -1,0 +1,5 @@
+# @package _global_
+
+defaults:
+- resnet18_mnist
+- _self_

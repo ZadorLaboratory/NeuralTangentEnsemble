@@ -97,19 +97,41 @@ class StaticShuffle:
             for k, v in features.items()
         }
 
-def default_data_transforms(dataset):
+@dataclass
+class SelectFeatures:
+    features: Sequence[str]
+
+    def __call__(self, features):
+        return {k: features[k] for k in self.features}
+
+def default_data_transforms(dataset, num_classes = None):
     if dataset == "mnist":
+        if num_classes is None:
+            num_classes = 10
         return PreprocessFn([ToFloat(),
                              Standardize((0.1307,), (0.3081,)),
-                             OneHot(10)],
+                             OneHot(num_classes)],
                             only_jax_types=True)
     elif dataset == "cifar10":
-        return PreprocessFn([RandomCrop((32, 32), (2, 2)),
+        if num_classes is None:
+            num_classes = 10
+        return PreprocessFn([SelectFeatures(("image", "label")),
+                             RandomCrop((32, 32), (2, 2)),
                              RandomFlipLR(),
                              ToFloat(),
                              Standardize((0.4914, 0.4822, 0.4465),
                                          (0.247, 0.243, 0.261)),
-                             OneHot(10)], only_jax_types=True)
+                             OneHot(num_classes)], only_jax_types=True)
+    elif dataset == "cifar100":
+        if num_classes is None:
+            num_classes = 100
+        return PreprocessFn([SelectFeatures(("image", "label")),
+                             RandomCrop((32, 32), (2, 2)),
+                             RandomFlipLR(),
+                             ToFloat(),
+                             Standardize((0.5071, 0.4865, 0.4409),
+                                         (0.2673, 0.2564, 0.2762)),
+                             OneHot(num_classes)], only_jax_types=True)
     else:
         return None
 
@@ -120,6 +142,43 @@ def select_class_subset(data, classes, name = "label"):
              for k, v in _data.items()}
 
     return _data if isinstance(data, dict) else _data["__data"]
+
+def select_class_subset_and_make_contiguous(data, classes, name="label"):
+    _data = data if isinstance(data, dict) else {"__data": data}
+    classes = tf.constant(classes, dtype=tf.int64)
+    num_classes = len(classes)
+
+    # Create a mapping from old labels to new labels
+    label_map = tf.lookup.StaticHashTable(
+        tf.lookup.KeyValueTensorInitializer(
+            classes,
+            tf.range(num_classes, dtype=tf.int64)
+        ),
+        default_value=-1
+    )
+
+    def remap_labels(x):
+        new_label = label_map.lookup(x[name])
+        return {**x, name: new_label}
+
+    _data = {k: v.filter(lambda x: tf.reduce_any(x[name] == classes))
+                .map(remap_labels)
+             for k, v in _data.items()}
+
+    return _data if isinstance(data, dict) else _data["__data"]
+
+def force_dataset_length(data, length = None):
+    # get the length by counting if necessary
+    if (length is None) and data.cardinality() != tf.data.INFINITE_CARDINALITY:
+        length = data.reduce(0, lambda x, _: x + 1).numpy()
+    else:
+        raise RuntimeError("Cannot force the length of an infinite dataset by"
+                           " counting. Either pass in a known length or a"
+                           " dataset with finite or unknown cardinality.")
+    # assert the length of the dataset is known
+    data = data.apply(tf.data.experimental.assert_cardinality(length))
+
+    return data
 
 def build_dataloader(data,
                      batch_size = 1,

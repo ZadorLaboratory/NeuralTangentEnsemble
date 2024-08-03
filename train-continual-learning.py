@@ -9,40 +9,113 @@ import jax.random as jrng
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import optax
-import seaborn as sns
 import hydra
 import orbax.checkpoint as ocp
+import numpy as np
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from functools import partial, reduce
 from orbax.checkpoint import CheckpointManager, CheckpointManagerOptions
 from clu.preprocess_spec import PreprocessFn
 
 from projectlib.utils import setup_rngs
-from projectlib.data import build_dataloader, default_data_transforms, StaticShuffle
+from projectlib.data import (build_dataloader,
+                             select_class_subset_and_make_contiguous,
+                             select_class_subset,
+                             default_data_transforms,
+                             force_dataset_length,
+                             StaticShuffle)
 from projectlib.training import (MultitaskMetrics,
                                  TrainState,
                                  create_train_step,
                                  create_ntk_ensemble_train_step,
                                  fit)
 
-def generate_tasks(cfg):
+def generate_tasks(cfg, rng):
     data = tfds.load(cfg.data.dataset)
     perm_size = reduce(lambda x, y: x * y, cfg.data.shape)
-    base_preprocess = default_data_transforms(cfg.data.dataset)
-    shuffle_preprocess = [PreprocessFn([StaticShuffle(perm_size, i)], only_jax_types=True)
-                          for i in range(cfg.ntasks)]
-    train_loaders = [build_dataloader(
-        data["train"],
-        batch_transform=base_preprocess + shuffle_preprocess[i],
-        batch_size=cfg.data.batchsize
-    ) for i in range(cfg.ntasks)]
-    test_loaders = [build_dataloader(
-        data["test"],
-        batch_transform=base_preprocess + shuffle_preprocess[i],
-        batch_size=cfg.data.batchsize
-    ) for i in range(cfg.ntasks)]
 
-    return train_loaders, test_loaders
+    if cfg.task_style == "shuffle":
+        base_preprocess = default_data_transforms(cfg.data.dataset)
+
+        shuffle_preprocess = [PreprocessFn([StaticShuffle(perm_size, i)], only_jax_types=True)
+                              for i in range(cfg.ntasks)]
+        train_loaders = [build_dataloader(
+            data["train"],
+            batch_transform=base_preprocess + shuffle_preprocess[i],
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+        test_loaders = [build_dataloader(
+            data["test"],
+            batch_transform=base_preprocess + shuffle_preprocess[i],
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+        class_subsets = [jnp.arange(len(cfg.data.classes)) for _ in range(cfg.ntasks)]
+
+    elif cfg.task_style == "domain-incremental": # Just len(cfg.data.classes) // cfg.ntasks logits
+        base_preprocess = default_data_transforms(cfg.data.dataset, len(cfg.data.classes) // cfg.ntasks)
+        assert len(cfg.data.classes) % cfg.ntasks == 0, "Number of classes must be divisible by number of tasks"
+
+        class_subsets = jrng.permutation(rng, jnp.asarray(cfg.data.classes),
+                                         independent=True)
+        class_subsets = jnp.array_split(class_subsets, cfg.ntasks)
+        train_loaders = [build_dataloader(
+            force_dataset_length(select_class_subset_and_make_contiguous(data["train"],
+                                                     class_subsets[i])),
+            batch_transform=base_preprocess,
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+        test_loaders = [build_dataloader(
+            force_dataset_length(select_class_subset_and_make_contiguous(data["test"],
+                                                     class_subsets[i])),
+            batch_transform=base_preprocess,
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+
+    elif cfg.task_style == "task-incremental": # All logits, but we mask out the ones we don't want
+        base_preprocess = default_data_transforms(cfg.data.dataset, len(cfg.data.classes))
+        class_subsets = jrng.permutation(rng, jnp.asarray(cfg.data.classes),
+                                         independent=True)
+        class_subsets = jnp.array_split(class_subsets, cfg.ntasks)    
+        train_loaders = [build_dataloader(
+            force_dataset_length(select_class_subset(data["train"],
+                                                     class_subsets[i])),
+            batch_transform=base_preprocess,
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+        test_loaders = [build_dataloader(
+            force_dataset_length(select_class_subset(data["test"],
+                                                     class_subsets[i])),
+            batch_transform=base_preprocess,
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+
+    elif cfg.task_style == "class-incremental": # All logits, no masking.
+        base_preprocess = default_data_transforms(cfg.data.dataset, len(cfg.data.classes))
+        class_subsets = jrng.permutation(rng, jnp.asarray(cfg.data.classes),
+                                         independent=True)
+        class_subsets = jnp.array_split(class_subsets, cfg.ntasks)    
+        train_loaders = [build_dataloader(
+            force_dataset_length(select_class_subset(data["train"],
+                                                     class_subsets[i])),
+            batch_transform=base_preprocess,
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+        test_loaders = [build_dataloader(
+            force_dataset_length(select_class_subset(data["test"],
+                                                     class_subsets[i])),
+            batch_transform=base_preprocess,
+            batch_size=cfg.data.batchsize
+        ) for i in range(cfg.ntasks)]
+
+        class_subsets = [jnp.arange(len(cfg.data.classes)) for _ in range(cfg.ntasks)]
+
+
+    return train_loaders, test_loaders, class_subsets
+
+@jax.jit
+def masked_cross_entropy(logits, labels, mask):
+    masked_logits = logits * mask
+    return optax.softmax_cross_entropy(masked_logits, labels)
 
 @hydra.main(config_path="./configs", config_name="train-continual-learning", version_base=None)
 def main(cfg: DictConfig):
@@ -56,15 +129,16 @@ def main(cfg: DictConfig):
 
     # setup rngs
     if cfg.nmodels > 1:
-        seeds = jrng.split(jrng.PRNGKey(cfg.seed), cfg.nmodels)
-        rngs = jax.vmap(setup_rngs)(seeds)
+        seeds = jrng.split(jrng.PRNGKey(cfg.seed), cfg.nmodels + 1)
+        rngs = jax.vmap(setup_rngs)(seeds[:-1])
+        rngs["tasks"] = seeds[-1] # task rng is same across models
     else:
-        rngs = setup_rngs(cfg.seed)
+        rngs = setup_rngs(cfg.seed, keys=["model", "train", "tasks"])
     # initialize randomness
     tf.random.set_seed(cfg.seed) # deterministic data iteration
 
     # setup dataloaders
-    train_loaders, test_loaders = generate_tasks(cfg)
+    train_loaders, test_loaders, class_subsets = generate_tasks(cfg, rngs["tasks"])
 
     # setup model
     model = hydra.utils.instantiate(cfg.model)
@@ -77,23 +151,23 @@ def main(cfg: DictConfig):
     init_state = partial(TrainState.from_model, model, dummy_input, opt,
                          metrics=MultitaskMetrics.create(n=cfg.ntasks))
     # make sure no parameters are zero
-    # assert jnp.all(init_state(init_keys).params != 0)
+    assert jnp.all(init_state(init_keys).params != 0)
 
     if cfg.nmodels > 1:
         train_state = jax.vmap(init_state)(init_keys)
     else:
         train_state = init_state(init_keys)
     # create training step
-    loss_fn = optax.softmax_cross_entropy
+    loss_fn = masked_cross_entropy
     if "projectlib.ntk" in cfg.optimizer._target_:
         train_step = create_ntk_ensemble_train_step(loss_fn, cfg.ntk_use_current_params)
     else:
         train_step = create_train_step(loss_fn)
-    @partial(jax.jit, static_argnums=3)
-    def metric_step(state: TrainState, batch, _ = None, suffix = ""):
+    @partial(jax.jit, static_argnums=4)
+    def metric_step(state: TrainState, batch, softmax_mask, _ = None, suffix = ""):
         xs, ys = batch
         ypreds = state.apply_fn(state.params, xs, rngs=state.rngs)
-        loss = jnp.mean(loss_fn(ypreds, ys))
+        loss = jnp.mean(loss_fn(ypreds, ys, softmax_mask))
         acc = jnp.mean(jnp.argmax(ypreds, axis=-1) == jnp.argmax(ys, axis=-1))
         metrics_updates = state.metrics.single_from_model_output(
             **{f"loss{suffix}": loss, f"accuracy{suffix}": acc}
@@ -124,12 +198,17 @@ def main(cfg: DictConfig):
     # log num params
     num_params = sum(jnp.prod(jnp.array(p.shape)) for p in jax.tree.leaves(train_state.params))
     logger.log({"num_params":num_params})
+
+    task_masks = [jnp.zeros(len(cfg.data.classes), dtype=jnp.float32).at[active_classes].set(1.0)
+                    for active_classes in class_subsets]
     
     # run training
     trace = train_state.metrics.init_history()
     for i, train_loader in enumerate(train_loaders):
         print(f"\nRUNNING Task {i}...")
-        train_state, trace = fit({"train": train_loader, "test": test_loaders},
+
+        train_state, trace = fit({"train": train_loader, "test": test_loaders,
+                                  "train_mask": task_masks[i], "test_masks": task_masks},
                                  train_state,
                                  train_step,
                                  partial(metric_step, suffix=f"_{i}"),

@@ -1,0 +1,6 @@
+# @package _global_
+
+model:
+  features: [128, 512, 1024, 4096]
+training:
+  nepochs: 25

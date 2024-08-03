@@ -1,0 +1,6 @@
+# @package _global_
+
+model:
+  num_classes: 10
+training:
+  nepochs: 50

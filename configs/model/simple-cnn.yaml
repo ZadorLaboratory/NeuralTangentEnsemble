@@ -1,5 +1,5 @@
 _target_: projectlib.models.SimpleCNN
-features: [32, 64]
+features: [16, 256]
 nclasses: 10
 pooling_factor: 2
 use_bn: false

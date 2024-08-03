@@ -8,7 +8,7 @@ Motivated by the problem of continual learning, and also by the biological obser
   c. If you expand around the origin, the weights themselves (rather than the change) become the weights in the ensemble.
 2. This interpretation gives you a learning rule which is, arguably, more biological. First, it is multiplicative, so positive weights stay positive and negative weights stay negative. Second, it gives you a way of thinking about pruning.
 
-See the Overleaf document for the Algorithm.
+See the manuscript document for the Algorithm.
 
 ## Current demonstrations
 
@@ -16,10 +16,10 @@ See the Overleaf document for the Algorithm.
 #### Installation
 ```bash
 # or replace micromamba with conda...but you should really use micromamba
-micromambda create -f environment.yaml
+micromamba create -f environment.yaml
 
 # active environment
-mircromamba activate neural-tangent-ensemble
+micromamba activate neural-tangent-ensemble
 
 # install deps
 poetry install --no-root

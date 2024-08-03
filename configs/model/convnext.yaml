@@ -1,0 +1,3 @@
+_target_: projectlib.models.ConvNeXtTiny
+nclasses: 10
+width_multiplier: 1

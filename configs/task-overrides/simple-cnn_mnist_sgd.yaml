@@ -1,0 +1,5 @@
+# @package _global_
+
+defaults:
+- simple-cnn_mnist
+- _self_
