@@ -156,33 +156,33 @@ def create_train_step(loss_fn, batch_stats = False):
     # if batch_stats are calculated, then we need to augment the apply_fn
     if batch_stats:
         @jax.jit
-        def train_step(state: TrainState, batch, _ = None):
+        def train_step(state: TrainState, batch, softmax_mask, _ = None):
             *xs, ys = batch
-            def compute_loss(params):
+            def compute_loss(params, mask):
                 yhats, aux = state.apply_fn(params, *xs,
                                             rngs=state.rngs,
                                             train=True,
                                             mutable=["batch_stats"])
 
-                return jnp.mean(loss_fn(yhats, ys)), aux
+                return jnp.mean(loss_fn(yhats, ys, mask)), aux
 
             grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
-            (loss, aux), grads = grad_fn(state.params)
+            (loss, aux), grads = grad_fn(state.params, softmax_mask)
             state = state.apply_gradients(grads=grads)
             state = state.replace(params=state.params.copy(aux))
 
             return loss, state, state.params
     else:
         @jax.jit
-        def train_step(state: TrainState, batch, _ = None):
+        def train_step(state: TrainState, batch, softmax_mask, _ = None):
             *xs, ys = batch
-            def compute_loss(params):
+            def compute_loss(params, mask):
                 yhats = state.apply_fn(params, *xs, rngs=state.rngs)
 
-                return jnp.mean(loss_fn(yhats, ys))
+                return jnp.mean(loss_fn(yhats, ys, mask))
 
             grad_fn = jax.value_and_grad(compute_loss)
-            loss, grads = grad_fn(state.params)
+            loss, grads = grad_fn(state.params, softmax_mask)
             state = state.apply_gradients(grads=grads)
 
             return loss, state
@@ -207,9 +207,9 @@ def create_ntk_ensemble_train_step(loss_fn, use_current_params = True, batch_sta
     # if batch_stats are calculated, then we need to augment the apply_fn
     if batch_stats:
         @jax.jit
-        def train_step(state: TrainState, batch, _ = None):
+        def train_step(state: TrainState, batch, softmax_mask, _ = None):
             xs, ys = batch
-            def compute_loss(params, xs, ys):
+            def compute_loss(params, xs, ys, mask):
                 xs = jnp.expand_dims(xs, axis=0) # add dummy batch dim
                 yhats, aux = state.apply_fn(params, xs,
                                             rngs=state.rngs,
@@ -217,14 +217,14 @@ def create_ntk_ensemble_train_step(loss_fn, use_current_params = True, batch_sta
                                             mutable=["batch_stats"])
                 yhats = yhats[0]
 
-                return loss_fn(yhats, ys), aux
+                return loss_fn(yhats, ys, mask), aux
 
             # recompute inital parameters + choose ntk diff center
             ntk_params, init_params = ntk_diff_center(state.params, state.opt_state.deltas)
             # compute per example gradients around initial parameters
             grad_fn = jax.vmap(jax.value_and_grad(compute_loss, has_aux=True),
-                               in_axes=(None, 0, 0))
-            (loss, aux), grads = grad_fn(ntk_params, xs, ys)
+                               in_axes=(None, 0, 0, 0))
+            (loss, aux), grads = grad_fn(ntk_params, xs, ys, softmax_mask)
             # average loss over samples
             loss = jnp.mean(loss)
             # compute ntk ensemble updates
@@ -236,20 +236,20 @@ def create_ntk_ensemble_train_step(loss_fn, use_current_params = True, batch_sta
             return loss, state
     else:
         @jax.jit
-        def train_step(state: TrainState, batch, _ = None):
+        def train_step(state: TrainState, batch, softmax_mask, _ = None):
             xs, ys = batch
-            def compute_loss(params, xs, ys):
+            def compute_loss(params, xs, ys, mask):
                 xs = jnp.expand_dims(xs, axis=0) # add dummy batch dim
                 yhats = state.apply_fn(params, xs, rngs=state.rngs)[0]
 
-                return loss_fn(yhats, ys)
+                return loss_fn(yhats, ys, mask)
 
             # recompute inital parameters + choose ntk diff center
             ntk_params, init_params = ntk_diff_center(state.params, state.opt_state.deltas)
             # compute per example gradients around initial parameters
             grad_fn = jax.vmap(jax.value_and_grad(compute_loss),
-                               in_axes=(None, 0, 0))
-            loss, grads = grad_fn(ntk_params, xs, ys)
+                               in_axes=(None, 0, 0, 0))
+            loss, grads = grad_fn(ntk_params, xs, ys, softmax_mask)
             # average loss over samples
             loss = jnp.mean(loss)
             # compute ntk ensemble updates
@@ -260,14 +260,14 @@ def create_ntk_ensemble_train_step(loss_fn, use_current_params = True, batch_sta
 
     return train_step
 
-def evaluate_metrics(state: TrainState, loaders, metrics_fn, rng, rng_split = jrng.split):
+def evaluate_metrics(state: TrainState, loaders, metrics_fn, rng, softmax_masks, rng_split = jrng.split):
     loaders = loaders if isinstance(loaders, list) else [loaders]
     for i, loader in enumerate(loaders):
         for batch in loader.as_numpy_iterator():
             batch = batch_values(batch)
             rng, rng_metric = rng_split(rng)
             state = state.split_rngs()
-            state = metrics_fn(state, batch, rng_metric, suffix=f"_{i}")
+            state = metrics_fn(state, batch, softmax_masks[i], rng_metric, suffix=f"_{i}")
 
     return state
 
@@ -294,13 +294,13 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
             return jrng.split(key)
 
     # evaluate initial train metrics
-    test_state = evaluate_metrics(state, data["train"], metrics_fn, rng, rng_split)
+    test_state = evaluate_metrics(state, data["train"], metrics_fn, rng, data["test_masks"], rng_split)
     # average metrics
     for metric, value in test_state.metrics.compute().items():
         metric_history["train"][metric].append(value)
     # evaluate initial test metrics
     if "test" in data.keys():
-        test_state = evaluate_metrics(state, data["train"], metrics_fn, rng,  rng_split)
+        test_state = evaluate_metrics(state, data["train"], metrics_fn, rng, data["test_masks"], rng_split)
         # average metrics
         for metric, value in test_state.metrics.compute().items():
             metric_history["test"][metric].append(value)
@@ -321,8 +321,8 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
             rng, rng_step = rng_split(rng)
             rng_step, rng_metric = rng_split(rng_step)
             state = state.split_rngs()
-            loss, state,  = step_fn(state, batch,  rng_step)
-            state = metrics_fn(state, batch,  rng_metric)
+            loss, state,  = step_fn(state, batch, data['train_mask'], rng_step)
+            state = metrics_fn(state, batch, data['train_mask'], rng_metric)
             state = state.replace(current_step=(state.current_step + 1))
             current_step += 1
             if (step_log_interval is not None) and (i % step_log_interval == 0):
@@ -338,7 +338,7 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
 
         # run test validation
         if "test" in data.keys():
-            test_state = evaluate_metrics(state, data["test"], metrics_fn, rng, rng_split)
+            test_state = evaluate_metrics(state, data["test"], metrics_fn, rng, data["test_masks"],rng_split)
             # average metrics
             for metric, value in test_state.metrics.compute().items():
                 metric_history["test"][metric].append(value)
