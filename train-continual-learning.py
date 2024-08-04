@@ -200,11 +200,11 @@ def main(cfg: DictConfig):
 
     # log num params
     num_params = sum(jnp.prod(jnp.array(p.shape)) for p in jax.tree.leaves(train_state.params))
-    logger.log({"num_params":num_params})
+    logger.log({"num_params": num_params})
 
     task_masks = [jnp.zeros(len(cfg.data.classes), dtype=jnp.float32).at[active_classes].set(1.0)
                     for active_classes in class_subsets]
-    
+
     # run training
     trace = train_state.metrics.init_history()
     for i, train_loader in enumerate(train_loaders):
