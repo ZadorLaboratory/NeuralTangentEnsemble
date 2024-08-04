@@ -6,6 +6,7 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
 import jax
 import jax.numpy as jnp
 import jax.random as jrng
+import jax.tree_util as jtu
 from jax.nn import log_softmax
 
 import tensorflow as tf
@@ -120,6 +121,18 @@ def masked_cross_entropy(logits, labels, mask):
     log_probs = log_softmax(logits, where=mask)
     return -jnp.sum(labels * log_probs, axis=-1)
 
+def grad_alignment(grad_fn, init_params, current_grad, *args):
+    # compute initial gradient
+    _, init_grad = grad_fn(init_params, *args)
+    # compute alignment
+    current_grad = jnp.concatenate([jnp.reshape(p, -1)
+                                    for p in jtu.tree_leaves(current_grad)], axis=0)
+    init_grad = jnp.concatenate([jnp.reshape(p, -1)
+                                    for p in jtu.tree_leaves(init_grad)], axis=0)
+    align = optax.cosine_distance(current_grad, init_grad, epsilon=1e-8)
+
+    return align
+
 @hydra.main(config_path="./configs", config_name="train-continual-learning", version_base=None)
 def main(cfg: DictConfig):
     if isinstance(cfg.gpu, ListConfig):
@@ -160,20 +173,32 @@ def main(cfg: DictConfig):
         train_state = jax.vmap(init_state)(init_keys)
     else:
         train_state = init_state(init_keys)
+    initial_params = train_state.params.copy()
     # create training step
     loss_fn = masked_cross_entropy
     if "projectlib.ntk" in cfg.optimizer._target_:
         train_step = create_ntk_ensemble_train_step(loss_fn, cfg.ntk_use_current_params)
     else:
         train_step = create_train_step(loss_fn)
+    # create metric step
+    if cfg.nmodels > 1:
+        grad_align_fn = jax.vmap(grad_alignment, in_axes=(None, 0, None, None))
+    else:
+        grad_align_fn = grad_alignment
     @partial(jax.jit, static_argnums=4)
     def metric_step(state: TrainState, batch, softmax_mask, _ = None, suffix = ""):
         xs, ys = batch
+        def compute_loss(params, mask):
+            yhats = state.apply_fn(params, xs, rngs=state.rngs)
+
+            return jnp.mean(loss_fn(yhats, ys, mask))
         ypreds = state.apply_fn(state.params, xs, rngs=state.rngs)
-        loss = jnp.mean(loss_fn(ypreds, ys, softmax_mask))
+        grad_fn = jax.value_and_grad(compute_loss)
+        loss, current_grad = grad_fn(state.params, softmax_mask)
+        align = grad_align_fn(grad_fn, initial_params, current_grad, softmax_mask)
         acc = jnp.mean(jnp.argmax(ypreds, axis=-1) == jnp.argmax(ys, axis=-1))
         metrics_updates = state.metrics.single_from_model_output(
-            **{f"loss{suffix}": loss, f"accuracy{suffix}": acc}
+            **{f"loss{suffix}": loss, f"accuracy{suffix}": acc, f"ntk_align{suffix}": align}
         )
         metrics = state.metrics.merge(metrics_updates)
         state = state.replace(metrics=metrics)

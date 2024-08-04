@@ -91,6 +91,8 @@ class MultitaskMetrics(MetricCollection):
             **{f"accuracy_{i}": metrics.Average.from_output(f"accuracy_{i}")
                for i in range(n)},
             **{f"loss_{i}": metrics.Average.from_output(f"loss_{i}")
+               for i in range(n)},
+            **{f"ntk_align_{i}": metrics.Average.from_output(f"ntk_align_{i}")
                for i in range(n)}
         )
 
