@@ -29,6 +29,7 @@ from projectlib.data import (build_dataloader,
                              StaticShuffle)
 from projectlib.training import (MultitaskMetrics,
                                  TrainState,
+                                 batch_values,
                                  create_train_step,
                                  create_ntk_ensemble_train_step,
                                  fit)
@@ -121,9 +122,17 @@ def masked_cross_entropy(logits, labels, mask):
     log_probs = log_softmax(logits, where=mask)
     return -jnp.sum(labels * log_probs, axis=-1)
 
-def grad_alignment(grad_fn, init_params, current_grad, *args):
+def grad_alignment(loss_fn, batch, initial_params, state, softmax_mask):
+    xs, ys = batch
+    def compute_loss(params, mask):
+        yhats = state.apply_fn(params, xs, rngs=state.rngs)
+
+        return jnp.mean(loss_fn(yhats, ys, mask))
     # compute initial gradient
-    _, init_grad = grad_fn(init_params, *args)
+    grad_fn = jax.grad(compute_loss)
+    init_grad = grad_fn(initial_params, softmax_mask)
+    # compute current gradient
+    current_grad = grad_fn(state.params, softmax_mask)
     # compute alignment
     current_grad = jnp.concatenate([jnp.reshape(p, -1)
                                     for p in jtu.tree_leaves(current_grad)], axis=0)
@@ -166,47 +175,40 @@ def main(cfg: DictConfig):
     dummy_input = jnp.ones((1, *cfg.data.shape))
     init_state = partial(TrainState.from_model, model, dummy_input, opt,
                          metrics=MultitaskMetrics.create(n=cfg.ntasks))
-    # make sure no parameters are zero
-    assert jnp.all(init_state(init_keys).params != 0)
 
     if cfg.nmodels > 1:
         train_state = jax.vmap(init_state)(init_keys)
     else:
         train_state = init_state(init_keys)
-    initial_params = train_state.params.copy()
+    # make sure no parameters are zero
+    assert jnp.all(train_state.params != 0)
     # create training step
     loss_fn = masked_cross_entropy
     if "projectlib.ntk" in cfg.optimizer._target_:
         train_step = create_ntk_ensemble_train_step(loss_fn, cfg.ntk_use_current_params)
+        def compute_init_params(state):
+            return jtu.tree_map(lambda p, d: p - d, state.params, state.opt_state.deltas)
     else:
         train_step = create_train_step(loss_fn)
+        def compute_init_params(state):
+            return state.params
     # create metric step
-    if cfg.nmodels > 1:
-        grad_align_fn = jax.vmap(grad_alignment, in_axes=(None, 0, None, None))
-    else:
-        grad_align_fn = grad_alignment
     @partial(jax.jit, static_argnums=4)
     def metric_step(state: TrainState, batch, softmax_mask, _ = None, suffix = ""):
         xs, ys = batch
-        def compute_loss(params, mask):
-            yhats = state.apply_fn(params, xs, rngs=state.rngs)
-
-            return jnp.mean(loss_fn(yhats, ys, mask))
         ypreds = state.apply_fn(state.params, xs, rngs=state.rngs)
-        grad_fn = jax.value_and_grad(compute_loss)
-        loss, current_grad = grad_fn(state.params, softmax_mask)
-        align = grad_align_fn(grad_fn, initial_params, current_grad, softmax_mask)
+        loss = jnp.mean(loss_fn(ypreds, ys, softmax_mask))
         acc = jnp.mean(jnp.argmax(ypreds, axis=-1) == jnp.argmax(ys, axis=-1))
         metrics_updates = state.metrics.single_from_model_output(
-            **{f"loss{suffix}": loss, f"accuracy{suffix}": acc, f"ntk_align{suffix}": align}
+            **{f"loss{suffix}": loss, f"accuracy{suffix}": acc}
         )
         metrics = state.metrics.merge(metrics_updates)
         state = state.replace(metrics=metrics)
 
         return state
     if cfg.nmodels > 1:
-        train_step = jax.vmap(train_step, in_axes=(0, None, 0))
-        metric_step = jax.vmap(metric_step, in_axes=(0, None, 0))
+        train_step = jax.vmap(train_step, in_axes=(0, None, None, 0))
+        metric_step = jax.vmap(metric_step, in_axes=(0, None, None, 0))
 
     # create checkpointing utility
     ckpt_opts = CheckpointManagerOptions(
@@ -228,7 +230,7 @@ def main(cfg: DictConfig):
     logger.log({"num_params": num_params})
 
     task_masks = [jnp.zeros(len(cfg.data.classes), dtype=jnp.float32).at[active_classes].set(1.0)
-                    for active_classes in class_subsets]
+                  for active_classes in class_subsets]
 
     # run training
     trace = train_state.metrics.init_history()
@@ -250,9 +252,27 @@ def main(cfg: DictConfig):
                                  epoch_logging=cfg.training.log_epochs,
                                  step_log_interval=cfg.training.log_interval)
 
+    # compute alignment with initial params
+    if "projectlib.ntk" in cfg.optimizer._target_:
+        avg_alignment = 0
+        for batch in test_loaders[-1].as_numpy_iterator():
+            batch = batch_values(batch)
+            init_params = compute_init_params(train_state)
+            align = grad_alignment(loss_fn, batch, init_params, train_state, task_masks[-1])
+            avg_alignment += align
+        avg_alignment = avg_alignment / len(test_loaders[-1])
+        print("Average NTK alignment =", avg_alignment)
+
     # save final state
-    ckpt = {"train_state": train_state, "metrics_history": trace}
-    ckpt_mgr.save(cfg.training.nepochs, args=ocp.args.StandardSave(ckpt), force=True)
+    if "projectlib.ntk" in cfg.optimizer._target_:
+        ckpt = {"train_state": train_state,
+                "metrics_history": trace,
+                "ntk_alignment": avg_alignment}
+    else:
+        ckpt = {"train_state": train_state,
+                "metrics_history": trace}
+    ckpt_mgr.save(cfg.ntasks * cfg.training.nepochs,
+                  args=ocp.args.StandardSave(ckpt), force=True)
     ckpt_mgr.wait_until_finished()
 
     # close logger

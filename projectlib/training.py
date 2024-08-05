@@ -91,9 +91,9 @@ class MultitaskMetrics(MetricCollection):
             **{f"accuracy_{i}": metrics.Average.from_output(f"accuracy_{i}")
                for i in range(n)},
             **{f"loss_{i}": metrics.Average.from_output(f"loss_{i}")
-               for i in range(n)},
-            **{f"ntk_align_{i}": metrics.Average.from_output(f"ntk_align_{i}")
                for i in range(n)}
+            # **{f"ntk_align_{i}": metrics.Average.from_output(f"ntk_align_{i}")
+            #    for i in range(n)}
         )
 
 def replace_zeros_with_noise(param, noise_level = 1e-3):
@@ -306,7 +306,7 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
         metric_history["train"][metric].append(value)
     # evaluate initial test metrics
     if "test" in data.keys():
-        test_state = evaluate_metrics(state, data["train"], metrics_fn, rng, data["test_masks"], rng_split)
+        test_state = evaluate_metrics(state, data["test"], metrics_fn, rng, data["test_masks"], rng_split)
         # average metrics
         for metric, value in test_state.metrics.compute().items():
             metric_history["test"][metric].append(value)
@@ -344,7 +344,7 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
 
         # run test validation
         if "test" in data.keys():
-            test_state = evaluate_metrics(state, data["test"], metrics_fn, rng, data["test_masks"],rng_split)
+            test_state = evaluate_metrics(state, data["test"], metrics_fn, rng, data["test_masks"], rng_split)
             # average metrics
             for metric, value in test_state.metrics.compute().items():
                 metric_history["test"][metric].append(value)
