@@ -123,13 +123,14 @@ def masked_cross_entropy(logits, labels, mask):
     return -jnp.sum(labels * log_probs, axis=-1)
 
 def grad_alignment(loss_fn, batch, initial_params, state, softmax_mask):
-    xs, ys = batch
+    xs, _ = batch
     def compute_loss(params, mask):
         yhats = state.apply_fn(params, xs, rngs=state.rngs)
+        log_probs = log_softmax(yhats, where=softmax_mask)
 
-        return jnp.mean(loss_fn(yhats, ys, mask))
+        return jnp.mean(jnp.exp(log_probs), axis=0)
     # compute initial gradient
-    grad_fn = jax.grad(compute_loss)
+    grad_fn = jax.jacrev(compute_loss)
     init_grad = grad_fn(initial_params, softmax_mask)
     # compute current gradient
     current_grad = grad_fn(state.params, softmax_mask)
