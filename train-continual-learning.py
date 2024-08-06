@@ -20,7 +20,7 @@ from functools import partial, reduce
 from orbax.checkpoint import CheckpointManager, CheckpointManagerOptions
 from clu.preprocess_spec import PreprocessFn
 
-from projectlib.utils import setup_rngs
+from projectlib.utils import setup_rngs, unzip
 from projectlib.data import (build_dataloader,
                              select_class_subset_and_make_contiguous,
                              select_class_subset,
@@ -122,24 +122,38 @@ def masked_cross_entropy(logits, labels, mask):
     log_probs = log_softmax(logits, where=mask)
     return -jnp.sum(labels * log_probs, axis=-1)
 
-def grad_alignment(loss_fn, batch, initial_params, state, softmax_mask):
+@jax.jit
+def grad_alignment(batch, initial_params, state, softmax_mask):
     xs, _ = batch
-    def compute_loss(params, mask):
-        yhats = state.apply_fn(params, xs, rngs=state.rngs)
-        log_probs = log_softmax(yhats, where=softmax_mask)
+    def compute_loss(params, xs, mask, output_index):
+        xs = jnp.reshape(xs, (1, *xs.shape))
+        yhats = state.apply_fn(params, xs, rngs=state.rngs)[0]
+        log_probs = log_softmax(yhats, where=mask)
 
-        return jnp.mean(jnp.exp(log_probs), axis=0)
+        return jnp.exp(log_probs)[output_index]
+    grad_fn = jax.vmap(jax.grad(compute_loss), in_axes=(None, 0, None, None))
+    def jacobian_body(i):
+        init_grad = grad_fn(initial_params, xs, softmax_mask, i)
+        current_grad = grad_fn(state.params, xs, softmax_mask, i)
+        align = jtu.tree_map(lambda x, y: jnp.mean((x - y) ** 2),
+                             init_grad, current_grad)
+
+        return jnp.stack(jtu.tree_leaves(align))
+    align = jnp.stack([jacobian_body(i) for i in range(softmax_mask.shape[0])])
     # compute initial gradient
-    grad_fn = jax.jacrev(compute_loss)
-    init_grad = grad_fn(initial_params, softmax_mask)
-    # compute current gradient
-    current_grad = grad_fn(state.params, softmax_mask)
+    # init_grad = [tuple(jtu.tree_leaves(jacobian_body(initial_params, i)))
+    #              for i in range(softmax_mask.shape[0])]
+    # init_grad = jtu.tree_map(lambda ps: jnp.stack(ps, axis=1), unzip(init_grad))
+    # # compute current gradient
+    # current_grad = [tuple(jtu.tree_leaves(jacobian_body(state.params, i)))
+    #                 for i in range(softmax_mask.shape[0])]
+    # current_grad = jtu.tree_map(lambda ps: jnp.stack(ps, axis=1), unzip(current_grad))
     # compute alignment
-    current_grad = jnp.concatenate([jnp.reshape(p, -1)
-                                    for p in jtu.tree_leaves(current_grad)], axis=0)
-    init_grad = jnp.concatenate([jnp.reshape(p, -1)
-                                    for p in jtu.tree_leaves(init_grad)], axis=0)
-    align = optax.cosine_distance(current_grad, init_grad, epsilon=1e-8)
+    # current_grad = jnp.concatenate([jnp.reshape(p, -1)
+    #                                 for p in jtu.tree_leaves(current_grad)], axis=0)
+    # init_grad = jnp.concatenate([jnp.reshape(p, -1)
+    #                                 for p in jtu.tree_leaves(init_grad)], axis=0)
+    # align = optax.cosine_distance(current_grad, init_grad, epsilon=1e-8)
 
     return align
 
@@ -259,7 +273,7 @@ def main(cfg: DictConfig):
         for batch in test_loaders[-1].as_numpy_iterator():
             batch = batch_values(batch)
             init_params = compute_init_params(train_state)
-            align = grad_alignment(loss_fn, batch, init_params, train_state, task_masks[-1])
+            align = grad_alignment(batch, init_params, train_state, task_masks[-1])
             avg_alignment += align
         avg_alignment = avg_alignment / len(test_loaders[-1])
         print("Average NTK alignment =", avg_alignment)
